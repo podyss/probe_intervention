@@ -1,0 +1,2 @@
+{"id":"example:0","split":"train","question":"There are 12 red balls and 7 blue balls. How many balls are there in total?","solution":"Add the two groups: 12 + 7 = 19.\n#### 19"}
+{"id":"example:1","split":"train","question":"A box has 24 pencils. They are shared equally among 6 students. How many pencils does each student receive?","solution":"Divide 24 by 6 to obtain 4 pencils per student.\n#### 4"}

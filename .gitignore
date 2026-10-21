@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+outputs/
+eval_results/
+wandb/
+data/*.jsonl
+!data/example.jsonl

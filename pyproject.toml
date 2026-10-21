@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "probe-intervention"
+version = "0.1.0"
+description = "Answer-probe-guided localization and intervention data construction"
+requires-python = ">=3.10,<3.14"
+dependencies = []
+
+[project.optional-dependencies]
+generation = ["vllm==0.11.0", "transformers==4.57.1", "math-verify==0.8.0"]
+training = ["torch==2.8.0", "transformers==4.57.1", "accelerate==1.11.0", "datasets==3.6.0", "peft==0.17.1"]
+parquet = ["pyarrow>=15"]
+
+[project.scripts]
+probe-int = "probe_int.pipeline:main"
+probe-int-train = "probe_int.train:main"
+probe-int-eval = "probe_int.evaluate:main"
+
+[tool.setuptools.packages.find]
+include = ["probe_int*"]
