@@ -136,6 +136,7 @@ def probe_state(probe, correct_threshold, wrong_threshold):
 
 
 def localize(row, correct_threshold=0.8, wrong_threshold=0.2):
+    """Find adjacent probe regression regardless of the trajectory's final grade."""
     if not 0 <= wrong_threshold < correct_threshold <= 1:
         raise ValueError("Require 0 <= wrong threshold < correct threshold <= 1")
     result = dict(row, candidate=None)
@@ -178,9 +179,14 @@ def sft_example(row, target="prefix_step"):
         raise ValueError(f"Refusing non-training sample {row['id']}")
     if row.get("repair_status") != "accepted":
         return None
-    successful = [sample for sample in row["continuations"] if sample["grade"]["correct"] is True]
-    if not successful:
-        return None
+    if row.get("repair_success_criterion") == "probe":
+        if row.get("repair_probe", {}).get("correct") is not True:
+            return None
+        successful = []
+    else:
+        successful = [sample for sample in row["continuations"] if sample["grade"]["correct"] is True]
+        if not successful:
+            return None
     prefix = row["trajectory_ids"][:row["candidate"]["start"]]
     replacement = row["replacement_ids"]
     if target == "prefix_step":
@@ -201,3 +207,33 @@ def sft_example(row, target="prefix_step"):
         "labels": [-100] * len(context) + completion,
         "candidate": row["candidate"], "source_model": row["model"],
     }
+
+
+def transition_sft_examples(row, correct_threshold=0.8, wrong_threshold=0.2):
+    """Build SFT targets from original-trajectory wrong-to-correct probe transitions."""
+    if row["split"] != "train":
+        raise ValueError(f"Refusing non-training sample {row['id']}")
+    probes = row["probes"]
+    offsets = [probe["offset"] for probe in probes]
+    if offsets != sorted(set(offsets)):
+        raise ValueError("Probe offsets must be strictly increasing")
+    states = [probe_state(probe, correct_threshold, wrong_threshold) for probe in probes]
+    for index in range(1, len(probes)):
+        if states[index - 1:index + 1] != ["wrong", "correct"]:
+            continue
+        start, end = offsets[index - 1], offsets[index]
+        trajectory = row["trajectory_ids"]
+        if start < 0 or end > len(trajectory):
+            raise ValueError(f"Probe offset outside trajectory for {row['id']}")
+        context = row["prompt_ids"]
+        completion = trajectory[:end]
+        yield {
+            "schema_version": 1, "id": f"{row['id']}:wrong-to-correct:{start}-{end}",
+            "source_id": row["id"], "split": "train", "target": "prefix_recovery",
+            "tokenizer_fingerprint": row["tokenizer_fingerprint"],
+            "input_ids": context + completion,
+            "labels": [-100] * len(context) + completion,
+            "candidate": {"start": start, "end": end,
+                          "left_probe": index - 1, "right_probe": index},
+            "source_model": row["model"],
+        }
