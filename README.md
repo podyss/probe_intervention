@@ -12,7 +12,7 @@
                    在前缀边界 b_i 复制上下文
                          └──关闭 think，强制直接回答──> a_i / 正误标签
 
-原轨迹最终答错，且相邻边界出现 correct → wrong
+任意轨迹的相邻边界出现 correct → wrong（不要求原轨迹最终答错）
                          │
                将 [b_(i-1), b_i) 标记为可疑区间
                          │
@@ -26,7 +26,7 @@
 ```
 
 - 这里的“探针”是 **generation-based answer probe**，不是隐状态分类器，也不需要另训探针。
-- 初版只对**最终答案已判定错误**的轨迹做定位；截断、无可解析答案不当作错误。
+- 对所有轨迹定位；原轨迹最终正确也可有中途 correct → wrong 翻转并生成候选区间。截断、无可解析答案不当作错误。
 - 默认选择**第一次观察到的相邻正确→错误翻转**，不是任意“曾经答对，后来答错”。不跨过 uncertain 边界。
 - 找到的是**答案可恢复性下降的区间**。答案提前猜对、采样噪声、探针模板效应，都可能造成伪翻转；不能据此声称找到了第一个逻辑错误。
 - 没有翻转的轨迹直接跳过，不回退到 LLM 找错，以便隔离这个 idea 的贡献。
@@ -52,7 +52,6 @@ probe_intervention/
 │   └── train.py               # Transformers SFT，默认 LoRA
 ├── data/
 │   ├── example.jsonl          # 手写格式示例，不代表实际实验集
-│   ├── gsm8k-500/              # 小规模 GSM8K parquet
 │   └── gsm8k-full/             # 完整 GSM8K train/test parquet
 └── docs/upstream.md           # 与原论文和官方实现的对应关系
 ```
@@ -117,7 +116,7 @@ probe-int collect --model "$MODEL" --input outputs/train.jsonl \
 - 所有分支只读同一条原始轨迹，不以探针生成的答案替换原轨迹。保存原始 `prompt_ids`、`trajectory_ids`、边界 offset 和每次探测结果，不从保存文本重新 tokenize 原始前缀。
 - 如果 Qwen3 模板只输出 assistant header、未预填 `<think>`，本实现显式预填 `<think>\n`；这样零前缀分支也能合法关闭 thinking。这个预填属于采样设置，做基线对照时必须保持一致。
 - 默认每条题目串行、题内探针小批处理，启用 vLLM prefix cache。大量长轨迹的成本可能很高；先从小样本确认翻转率。
-- 输出同时保留正确轨迹，便于衡量探针信号在成功轨迹中的假阳性。定位阶段才筛最终错误轨迹。
+- 输出保留所有轨迹；定位阶段扫描全部轨迹的相邻探针状态，不以最终答案正误筛选。
 
 ### 4.3 独立 vLLM 评估
 

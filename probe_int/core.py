@@ -139,9 +139,6 @@ def localize(row, correct_threshold=0.8, wrong_threshold=0.2):
     if not 0 <= wrong_threshold < correct_threshold <= 1:
         raise ValueError("Require 0 <= wrong threshold < correct threshold <= 1")
     result = dict(row, candidate=None)
-    if row["final_grade"]["correct"] is not False:
-        result["localization_status"] = "not_final_wrong"
-        return result
     probes = row["probes"]
     offsets = [probe["offset"] for probe in probes]
     if offsets != sorted(set(offsets)):

@@ -25,7 +25,7 @@
 
 | 官方入口 | 职责 | 本项目对应 |
 | --- | --- | --- |
-| `sample_rollouts.py` + `filter_rollouts.ipynb` | 采样并筛选错误轨迹 | `collect` 保存全部；`localize` 要求最终答案明确错误 |
+| `sample_rollouts.py` + `filter_rollouts.ipynb` | 采样并筛选错误轨迹 | `collect` 保存全部；`localize` 在全部轨迹上扫描相邻探针翻转，不要求最终答案错误 |
 | `propose_interventions.py` + `parse_interventions.ipynb` | 根据参考解找错并生成一步干预 | `localize` 用答案探针翻转选区间；`repair` 只在指定区间提出替换 |
 | `sample_guided_rollouts.py` + `filter_guided_rollouts.ipynb` | 在 prefix + intervention 后无参考解续写，筛正确结果 | `repair` 的独立学生请求 + `build-sft` 的成功过滤 |
 | `sft.sh` / LlamaFactory | 对 `intervention_guided_attempt` 做 SFT | 本项目直接导出 token 标签并用 Transformers Trainer 训练 |
