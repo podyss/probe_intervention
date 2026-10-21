@@ -62,12 +62,10 @@ probe_intervention/
 
 Python >= 3.10。依赖版本采用本地 OPSD 已使用的组合，不要求修改父项目环境。
 
-推荐用 uv 在此目录创建独立环境并锁定依赖。完整 GPU 流程安装命令：
+在此目录运行以下命令即可创建环境并安装完整流程所需依赖：
 
 ```bash
-cd probe_intervention
-uv sync --extra generation --extra training --extra parquet
-source .venv/bin/activate
+uv sync
 ```
 
 `uv.lock` 固定解析版本；vLLM/PyTorch wheel 仍受平台 CUDA 兼容性影响。无需 FlashAttention。初版后端支持具有 Qwen3 风格 `<think> ... </think>` 模板的**完整模型 checkpoint**；不直接加载未合并的 LoRA adapter。推理拒绝启用 `trust_remote_code`。

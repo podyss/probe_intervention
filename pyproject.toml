@@ -7,12 +7,16 @@ name = "probe-intervention"
 version = "0.1.0"
 description = "Answer-probe-guided localization and intervention data construction"
 requires-python = ">=3.10,<3.14"
-dependencies = []
-
-[project.optional-dependencies]
-generation = ["vllm==0.11.0", "transformers==4.57.1", "math-verify==0.8.0"]
-training = ["torch==2.8.0", "transformers==4.57.1", "accelerate==1.11.0", "datasets==3.6.0", "peft==0.17.1"]
-parquet = ["pyarrow>=15"]
+dependencies = [
+    "accelerate==1.11.0",
+    "datasets==3.6.0",
+    "math-verify==0.8.0",
+    "peft==0.17.1",
+    "pyarrow>=15",
+    "torch==2.8.0",
+    "transformers==4.57.1",
+    "vllm==0.11.0",
+]
 
 [project.scripts]
 probe-int = "probe_int.pipeline:main"
@@ -21,3 +25,7 @@ probe-int-eval = "probe_int.evaluate:main"
 
 [tool.setuptools.packages.find]
 include = ["probe_int*"]
+
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"

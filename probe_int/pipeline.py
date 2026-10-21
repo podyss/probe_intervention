@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -50,7 +51,9 @@ def collect(args, backend):
         prompt_text = tokenizer.decode(prompt, skip_special_tokens=False)
         if "<think>" not in prompt_text or prompt_text.rfind("<think>") < prompt_text.rfind("</think>"):
             raise ValueError("Initial backend supports Qwen3-style open <think> chat templates only")
+        trajectory_started = time.perf_counter()
         trajectory = backend.generate([prompt], args.max_trajectory_tokens, args.temperature)[0][0]
+        trajectory_seconds = time.perf_counter() - trajectory_started
         row = dict(
             source, schema_version=1, model=args.model, tokenizer_fingerprint=backend.fingerprint,
             prompt_ids=prompt, trajectory_ids=trajectory["token_ids"], trajectory=trajectory["text"],
@@ -59,13 +62,16 @@ def collect(args, backend):
             boundary_mode=args.boundary, probe_suffix_ids=suffix, probes=[],
             collect_cost={"trajectory_input_tokens": len(prompt),
                           "trajectory_output_tokens": len(trajectory["token_ids"]),
-                          "probe_input_tokens": 0, "probe_output_tokens": 0},
+                          "probe_input_tokens": 0, "probe_output_tokens": 0,
+                          "trajectory_seconds": trajectory_seconds, "probe_seconds": 0.0},
         )
         offsets = reasoning_boundaries(trajectory["token_ids"], tokenizer, args.boundary, args.interval)
         for batch_start in range(0, len(offsets), args.probe_batch_size):
             batch_offsets = offsets[batch_start:batch_start + args.probe_batch_size]
             requests = [prompt + trajectory["token_ids"][:offset] + suffix for offset in batch_offsets]
+            probe_started = time.perf_counter()
             results = backend.generate(requests, args.max_answer_tokens, args.probe_temperature, args.probe_samples)
+            row["collect_cost"]["probe_seconds"] += time.perf_counter() - probe_started
             row["collect_cost"]["probe_input_tokens"] += sum(len(request) for request in requests)
             row["collect_cost"]["probe_output_tokens"] += sum(len(sample["token_ids"]) for samples in results for sample in samples)
             for offset, samples in zip(batch_offsets, results):

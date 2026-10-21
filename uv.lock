@@ -2635,38 +2635,29 @@ wheels = [
 name = "probe-intervention"
 version = "0.1.0"
 source = { editable = "." }
-
-[package.optional-dependencies]
-generation = [
-    { name = "math-verify" },
-    { name = "transformers" },
-    { name = "vllm" },
-]
-parquet = [
-    { name = "pyarrow", version = "25.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pyarrow", version = "26.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-training = [
+dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
+    { name = "math-verify" },
     { name = "peft" },
+    { name = "pyarrow", version = "25.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyarrow", version = "26.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "torch" },
     { name = "transformers" },
+    { name = "vllm" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", marker = "extra == 'training'", specifier = "==1.11.0" },
-    { name = "datasets", marker = "extra == 'training'", specifier = "==3.6.0" },
-    { name = "math-verify", marker = "extra == 'generation'", specifier = "==0.8.0" },
-    { name = "peft", marker = "extra == 'training'", specifier = "==0.17.1" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15" },
-    { name = "torch", marker = "extra == 'training'", specifier = "==2.8.0" },
-    { name = "transformers", marker = "extra == 'generation'", specifier = "==4.57.1" },
-    { name = "transformers", marker = "extra == 'training'", specifier = "==4.57.1" },
-    { name = "vllm", marker = "extra == 'generation'", specifier = "==0.11.0" },
+    { name = "accelerate", specifier = "==1.11.0" },
+    { name = "datasets", specifier = "==3.6.0" },
+    { name = "math-verify", specifier = "==0.8.0" },
+    { name = "peft", specifier = "==0.17.1" },
+    { name = "pyarrow", specifier = ">=15" },
+    { name = "torch", specifier = "==2.8.0" },
+    { name = "transformers", specifier = "==4.57.1" },
+    { name = "vllm", specifier = "==0.11.0" },
 ]
-provides-extras = ["generation", "training", "parquet"]
 
 [[package]]
 name = "prometheus-client"
