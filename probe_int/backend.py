@@ -5,6 +5,7 @@ class VLLMBackend:
     def __init__(self, args):
         from vllm import LLM, SamplingParams
 
+        self.args = args
         self.sampling_params = SamplingParams
         self.max_model_len = args.max_model_len
         self.llm = LLM(
@@ -46,7 +47,8 @@ class VLLMBackend:
             n=samples, temperature=temperature, max_tokens=max_tokens, stop=stop,
         )
         outputs = self.llm.generate(
-            [{"prompt_token_ids": prompt} for prompt in prompts], params, use_tqdm=False,
+            [{"prompt_token_ids": prompt} for prompt in prompts], params,
+            use_tqdm=not getattr(self.args, "no_progress", True),
         )
         return [[{"text": sample.text, "token_ids": list(sample.token_ids),
                   "finish_reason": sample.finish_reason} for sample in output.outputs]

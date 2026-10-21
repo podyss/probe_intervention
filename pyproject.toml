@@ -27,5 +27,5 @@ probe-int-eval = "probe_int.evaluate:main"
 include = ["probe_int*"]
 
 [[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true

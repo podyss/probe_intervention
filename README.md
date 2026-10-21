@@ -77,13 +77,13 @@ uv sync
 ### 4.1 整理训练数据
 
 ```bash
-probe-int prepare --input data/gsm8k-500/train.parquet --split train \
+probe-int prepare --input data/gsm8k-full/train.parquet --split train \
   --limit 8 --output outputs/train.jsonl
-probe-int prepare --input data/gsm8k-500/test.parquet --split test \
+probe-int prepare --input data/gsm8k-full/test.parquet --split test \
   --limit 8 --output outputs/test.jsonl
 ```
 
-也可直接转换本地 GSM8K parquet：
+以上命令通过 `--limit 8` 从完整数据集中各取前 8 条，用于快速验证流程；移除 `--limit` 即可转换完整 split。也可直接转换其他本地 GSM8K parquet：
 
 ```bash
 probe-int prepare --input /path/to/train.parquet --split train \
