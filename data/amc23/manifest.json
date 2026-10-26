@@ -1,0 +1,19 @@
+{
+  "dataset": "zwhe99/amc23",
+  "revision": "f9810c0439cd3c670ec885d328a2f06a87f3694a",
+  "source": "https://hf-mirror.com/datasets/zwhe99/amc23",
+  "license": null,
+  "source_file": "source/test-00000-of-00001.parquet",
+  "source_sha256": "b696e87ba47be4e879a60fd4ef1d4aa522ba78c5ae013c6aff5cc9788a397c5e",
+  "source_rows": 40,
+  "outputs": {
+    "test.jsonl": 40
+  },
+  "normalized_fields": {
+    "id": "amc23:<source id>",
+    "split": "test",
+    "question": "question",
+    "solution": "answer converted to a string",
+    "url": "url"
+  }
+}

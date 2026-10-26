@@ -111,6 +111,7 @@ probe-int collect --model "$MODEL" --input outputs/train.jsonl \
 - `--boundary token --interval 256`：每 256 个原始生成 token 探测一次。区间可能跨步或截断一句话，只能解释为 token 区间。
 - 两种模式都额外探测零前缀和 `</think>` 前的末尾；不会在答案区间继续探测。
 - 默认每个边界一次贪心答案生成；提高抗采样噪声能力可用 `--probe-samples 5 --probe-temperature 0.7`。
+- `--probe-mode judge`：把数据集标准答案放进判定提示词，按 `yes/no` 两个候选 token 的分数归一化为 `p_correct`；定位阶段直接用该概率与 `--correct-threshold` / `--wrong-threshold` 比较。两个阈值可设为相同值以按概率高低二分；恰好等于阈值时为 uncertain。默认 `answer` 模式保持原行为。
 - 所有分支只读同一条原始轨迹，不以探针生成的答案替换原轨迹。保存原始 `prompt_ids`、`trajectory_ids`、边界 offset 和每次探测结果，不从保存文本重新 tokenize 原始前缀。
 - 如果 Qwen3 模板只输出 assistant header、未预填 `<think>`，本实现显式预填 `<think>\n`；这样零前缀分支也能合法关闭 thinking。这个预填属于采样设置，做基线对照时必须保持一致。
 - 默认每条题目串行、题内探针小批处理，启用 vLLM prefix cache。大量长轨迹的成本可能很高；先从小样本确认翻转率。
@@ -188,6 +189,7 @@ torchrun --nproc_per_node=4 -m probe_int.train --model "$MODEL" \
 - 每个数据命令创建 `<output>.manifest.json`，保存参数、输入 SHA256、依赖版本、完成状态和输出行数。输出存在则拒绝覆盖；下游拒绝 manifest 未完成的输入。中断留下的文件不是完整运行，初版不支持自动断点续跑。
 - 采样种子只能帮助复现，不能保证不同并行设置、驱动或 kernel 下 bitwise 一致。
 - 中间 JSONL 含参考解与轨迹，仅供构造/分析数据；`sft.jsonl` 不导出参考解字段。
-- 数值答案使用精确有理数比较；其他表达式使用可选 `math-verify`。输出必须提供完整 `\boxed{...}`；解析失败不是 wrong。
+- 数值答案使用精确有理数比较；其他表达式使用 `math-verify`，为标准答案和 boxed 最终答案保留 LaTeX 锚点，避免将矩阵、区间或多解答案误解析为局部数字。兼容 `####` 最终答案、选项字母附带文字、数字序数和省略百分号的标准答案；解析失败不是 wrong，截断输出标记为 `incomplete`。
+- 评测汇总的 `accuracy` 以全部题目为分母，`accuracy_on_graded` 只以成功评分题目为分母；`grade_status_counts` 列出 `valid`、`unparseable`、`incomplete` 的实际数量。
 - `summarize` 同时累加采样、探针、纠正、续写的输入/输出 token 数。输入统计为提交的请求长度（每个 n-sampling 请求只记一次），不等于扣除 prefix cache 后的实际计算量。
 - 仓库忽略 `outputs/`、`eval_results/`、`wandb/`。不得上传模型、私有数据、token 或机器专有路径。

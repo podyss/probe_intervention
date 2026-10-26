@@ -1,9 +1,58 @@
 # Bundled datasets
 
+## AMC 2023
+
+`amc23/` contains the 40-question test split from
+[`zwhe99/amc23`](https://hf-mirror.com/datasets/zwhe99/amc23), pinned at
+revision `f9810c0439cd3c670ec885d328a2f06a87f3694a`.
+
+- `amc23/source/test-00000-of-00001.parquet`: the original Hugging Face file.
+- `amc23/test.jsonl`: normalized rows ready for `probe-int-eval`.
+- `amc23/prepare.py`: reproducible conversion from the source Parquet.
+- `amc23/manifest.json`: source revision, checksum, field mapping, and row count.
+
+The normalized schema is `id`, `split`, `question`, `solution`, and `url`;
+the source's numeric `answer` is converted to a string in `solution`. Run an
+evaluation directly with:
+
+```bash
+probe-int-eval --model "$MODEL" --input data/amc23/test.jsonl \
+  --output outputs/amc23/eval.jsonl --temperature 0
+```
+
+The upstream dataset card does not declare a license. Check the source and
+underlying AMC/AoPS terms before redistributing these files.
+
 `gsm8k-full/` contains the complete GSM8K train/test parquet files from
 the parent OPSD workspace. The dataset is included here so
 this standalone project can be copied to a separate GitHub repository without
 an implicit dependency on parent-directory files.
+
+`aime-2024/` contains the HuggingFaceH4 AIME 2024 dataset and a prepared
+evaluation split:
+
+- `aime-2024/train.parquet`: the source dataset file from
+  `HuggingFaceH4/aime_2024` (30 problems, source split `train`).
+- `aime-2024/test.jsonl`: normalized evaluation rows accepted by
+  `probe-int-eval` (30 problems, labeled `test` for this repository's
+  evaluator).
+- Source columns `problem`, `answer`, and `id` map to `question`, `solution`,
+  and `id`. When both `answer` and `solution` exist, `answer` is used as the
+  authoritative grading reference; detailed worked solutions are not used as
+  the gold answer.
+
+Run evaluation from the repository root with:
+
+```bash
+probe-int-eval --model "$MODEL" \
+  --input data/aime-2024/test.jsonl \
+  --output outputs/aime-2024/eval.jsonl \
+  --temperature 0
+```
+
+The source dataset card describes these as the 30 problems from AIME I and
+AIME II 2024 and identifies the original source as `AI-MO/aimo-validation-aime`.
+Check the upstream dataset card and license before redistribution.
 
 - `gsm8k-full/{train,test}.parquet`: complete GSM8K train/test splits.
 - Schema: `question`/`problem`, `answer`/`solution`, as emitted by the source parquet.
@@ -21,3 +70,39 @@ probe-int prepare --input data/gsm8k-full/test.parquet --split test \
 ```
 
 Remove `--limit` to prepare the complete split.
+
+## DeepMath-103K
+
+`deepmath-103k/` contains the complete DeepMath-103K dataset from
+[`zwhe99/DeepMath-103K`](https://hf-mirror.com/datasets/zwhe99/DeepMath-103K)
+at revision `5cf055d1fe3d7a2eb19719ac020211469736ae44` (MIT license).
+
+- `deepmath-103k/source/data/`: all 10 original Parquet shards (103,022 rows).
+- `deepmath-103k/all.jsonl`: complete normalized dataset.
+- `deepmath-103k/train.jsonl`: 1,000 training problems.
+- `deepmath-103k/test.jsonl`: 500 test problems.
+- `deepmath-103k/manifest.json`: source revision, field mapping, sample seed, and selected IDs.
+- `deepmath-103k/prepare.py`: reproducible conversion and sampling script.
+
+The JSONL format uses `id`, `question`, and `solution`; `solution` maps from
+the source `final_answer` field. `difficulty`, `topic`, and `source_split` are
+retained. The train and test sets are disjoint uniform samples (seed 42) from
+rows with nonempty questions and answers. Two source rows have empty answers;
+they remain in the complete files but are excluded from both samples.
+
+Use the prepared subsets directly with the project commands, for example:
+
+```bash
+probe-int collect --model "$MODEL" \
+  --input data/deepmath-103k/train.jsonl \
+  --output outputs/deepmath-103k/probes.jsonl
+probe-int-eval --model "$MODEL" \
+  --input data/deepmath-103k/test.jsonl \
+  --output outputs/deepmath-103k/eval.jsonl
+```
+
+Rebuild the normalized files from the downloaded source shards with:
+
+```bash
+uv run python data/deepmath-103k/prepare.py
+```

@@ -2,6 +2,11 @@ QUESTION = "{question}\n\nReason step by step and put the final answer in \\boxe
 
 PROBE_SUFFIX = "\n</think>\n\nGive only the final answer in \\boxed{}: "
 
+JUDGE_PROBE_SUFFIX = (
+    '\n</think>\n\nBased on the reasoning above, is the final answer equal to '
+    'the correct answer "{gold_answer}"? Answer only yes or no:'
+)
+
 ORACLE_SOLVE = """You are an expert mathematician. Solve the problem step by step,
 guided by the high-level oracle solution. Show a coherent derivation, but do not
 copy the oracle solution verbatim.
@@ -14,33 +19,69 @@ copy the oracle solution verbatim.
 </high_level_oracle_solution>
 """
 
-REPAIR = """You are helping a student correct a mathematical attempt. The probe
-has already selected the exact segment to replace. Do NOT search for a different
-first error or revise any other part of the attempt. Use the oracle solution and
-correct reference attempt as privileged information to formulate one useful
-intervention, but do not reveal the final answer or copy the reference solution.
+PRIVILEGED_SUFFIX_RECONSTRUCTION = """You are an expert mathematician correcting a failed solution.
+Continue from the retained prefix and reconstruct the entire remaining reasoning,
+including a correct final answer in \\boxed{{}}. Use the reference solution as
+privileged guidance. Keep the retained prefix unchanged and do not repeat it.
+The original suffix is provided only to identify and avoid its errors. Produce
+only the continuation that should follow the retained prefix.
 
-Return exactly ONE concise reasoning step from the student's perspective. Do not
-include an error report, heading, tags, citations, or final answer. Do not use
-blank lines inside the step. The step replaces the selected segment and is
-concatenated directly after the retained prefix; continue any partial sentence.
-
-<problem>
+Problem:
 {question}
-</problem>
-<high_level_oracle_solution>
+
+Reference solution (privileged guidance):
 {solution}
-</high_level_oracle_solution>
-<correct_reference_attempt>
-{correct_attempt}
-</correct_reference_attempt>
-<incorrect_student_attempt>
-{incorrect_attempt}
-</incorrect_student_attempt>
-<retained_prefix>
+
+Retained correct prefix:
 {prefix}
-</retained_prefix>
-<suspected_segment_to_replace>
+
+Original incorrect suffix to replace:
+{suffix}
+"""
+
+REPAIR = """You are helping a student correct a mathematical attempt. The
+answer probe has already selected the exact segment to replace. Use the
+reference solution and the correct solution above to carefully verify this
+selected segment against the student's full attempt. Check each claim in the
+selected segment, identify its first factual or logical error, and check whether
+the student later corrects that error. Do not move the repair to another part
+of the attempt.
+
+Propose one intervention step to replace the selected segment. Write it from
+the student's perspective so the student can continue naturally from the
+retained prefix. Give enough guidance to recover, but do not include the exact
+final answer or copy the reference solution.
+
+Draft the intervention, then self-check it: (1) it does not include the exact
+final answer, (2) it contains the key insight needed to continue, and (3) it
+addresses the selected segment. Revise it until all three checks pass.
+
+Return a detailed verification log, a critical-error report for the first
+unrecovered error in the selected segment, and the final intervention. Quote
+the relevant student reasoning in the log and report. Use this exact format for
+the final intervention so it can be extracted:
+<intervention>
+{{"content": "ONE reasoning step", "location": 1}}
+</intervention>
+
+Problem:
+{question}
+
+Reference solution:
+{solution}
+
+Correct solution generated above:
+{correct_attempt}
+
+Exact final answer for the self-check:
+{correct_answer}
+
+Incorrect attempt:
+{incorrect_attempt}
+
+Retained prefix immediately before the probe-selected segment:
+{prefix}
+
+Probe-selected segment to replace:
 {segment}
-</suspected_segment_to_replace>
 """

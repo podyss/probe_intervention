@@ -1,0 +1,18 @@
+{
+  "arguments": {
+    "command": "prepare",
+    "input": "data/aime-2024/train.parquet",
+    "output": "data/aime-2024/test.jsonl",
+    "split": "test",
+    "limit": null
+  },
+  "input_sha256": "a00a1d204d8b194df1c14429b14e04ee144af30eda70d44157425bad79abafe5",
+  "versions": {
+    "probe-intervention": "0.1.0",
+    "vllm": "0.11.0",
+    "transformers": "4.57.1",
+    "math-verify": "0.8.0"
+  },
+  "status": "complete",
+  "rows": 30
+}

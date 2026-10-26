@@ -5,6 +5,7 @@ import json
 import multiprocessing
 import os
 import socket
+from collections import Counter
 from pathlib import Path
 
 from .core import grade, read_jsonl, write_jsonl
@@ -17,7 +18,8 @@ def evaluate_rows(args, source):
     backend = VLLMBackend(args)
     prompts = [backend.chat(QUESTION.format(question=row["question"]), thinking=True)
                for row in source]
-    generations = backend.generate(prompts, args.max_tokens, args.temperature)
+    generations = backend.generate(prompts, args.max_tokens, args.temperature,
+                                   top_p=args.top_p)
     results = []
     for row, samples in zip(source, generations):
         sample = samples[0]
@@ -63,6 +65,7 @@ def build_parser():
     parser.add_argument("--max-model-len", type=int, default=16384)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--temperature", type=float, default=0)
+    parser.add_argument("--top-p", type=float, default=1)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--data-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
@@ -79,8 +82,8 @@ def main():
     if min(args.max_model_len, args.max_tokens, args.tensor_parallel_size,
            args.data_parallel_size) <= 0:
         raise ValueError("Token limits and tensor parallel size must be positive")
-    if args.temperature < 0 or not 0 < args.gpu_memory_utilization <= 1:
-        raise ValueError("Temperature must be nonnegative and GPU utilization in (0, 1]")
+    if args.temperature < 0 or not 0 < args.top_p <= 1 or not 0 < args.gpu_memory_utilization <= 1:
+        raise ValueError("Temperature must be nonnegative; top-p and GPU utilization must be in (0, 1]")
 
     source = []
     for row in read_jsonl(args.input):
@@ -136,13 +139,16 @@ def main():
         results = [by_id[row["id"]] for row in source]
         metadata["dp_shards"] = [str(path) for path in shard_outputs]
     count = write_jsonl(output, results)
-    metadata.update(status="complete", rows=count)
-    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     correct = sum(row["grade"]["correct"] is True for row in results)
     graded = sum(row["grade"]["correct"] is not None for row in results)
-    print(json.dumps({"rows": count, "graded": graded, "correct": correct,
-                      "accuracy_on_graded": correct / graded if graded else None,
-                      "output": str(output)}, ensure_ascii=False))
+    statuses = Counter(row["grade"]["status"] for row in results)
+    summary = {"rows": count, "graded": graded, "correct": correct,
+               "accuracy": correct / count if count else None,
+               "accuracy_on_graded": correct / graded if graded else None,
+               "grade_status_counts": dict(statuses), "output": str(output)}
+    metadata.update(status="complete", rows=count, summary=summary)
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":
