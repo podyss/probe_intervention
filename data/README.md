@@ -92,6 +92,39 @@ those audit records before redistributing the annotations.
 
 The experiment trained on `train.jsonl` and evaluated on `test.jsonl` with
 `probe_int/train_step_labels.py` and `probe_int/evaluate_step_labels.py`.
+For multi-GPU LoRA training, launch one process per GPU with `torchrun`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 uv run torchrun --standalone --nproc_per_node=2 \
+  -m probe_int.train_step_labels \
+  --model "$BASE_MODEL" \
+  --data data/teacher-first-error-short-200/train.jsonl \
+  --output outputs/teacher-first-error-short-200/lora-next \
+  --epochs 3 --learning-rate 2e-5 --batch-size 1 \
+  --gradient-accumulation-steps 4 --max-length 4096 --lora-r 8 \
+  --gpu-memory-fraction 0.9 --seed 42
+```
+
+Each DDP process holds a full model replica on its GPU; this distributes the
+training workload, not the model's memory footprint. Only rank 0 writes the
+adapter, tokenizer, and experiment metadata.
+
+For full-parameter fine-tuning, use FSDP full sharding instead of DDP:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 uv run torchrun --standalone --nproc_per_node=4 \
+  -m probe_int.train_step_labels \
+  --model "$BASE_MODEL" \
+  --data data/teacher-first-error-short-200/train.jsonl \
+  --output outputs/teacher-first-error-short-200/full-finetune \
+  --full-finetune --epochs 3 --learning-rate 2e-5 --batch-size 1 \
+  --gradient-accumulation-steps 4 --max-length 4096 \
+  --gpu-memory-fraction 0.9 --seed 42
+```
+
+This saves a full model checkpoint rather than a LoRA adapter. Full fine-tuning
+has substantially higher memory use; if it runs out of memory, lower
+`--max-length` (provided every training example fits the reduced limit).
 
 ## DeepMath-103K
 

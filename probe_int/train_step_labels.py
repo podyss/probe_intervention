@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -56,6 +57,7 @@ def main():
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--lora-r", type=int, default=8)
+    parser.add_argument("--full-finetune", action="store_true")
     parser.add_argument("--gpu-memory-fraction", type=float, default=0.14)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -64,6 +66,8 @@ def main():
         parser.error("Training settings must be positive")
     if not 0 < args.gpu_memory_fraction <= 1:
         parser.error("gpu-memory-fraction must be in (0, 1]")
+    if args.full_finetune and int(os.environ.get("WORLD_SIZE", "1")) < 2:
+        parser.error("--full-finetune requires torchrun with at least two GPU processes")
 
     output = Path(args.output)
     if output.exists() and any(output.iterdir()):
@@ -73,7 +77,6 @@ def main():
     import torch.nn.functional as F
     from datasets import Dataset
     from functools import partial
-    from peft import LoraConfig, get_peft_model
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -84,6 +87,8 @@ def main():
 
     set_seed(args.seed)
     if torch.cuda.is_available():
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        torch.cuda.set_device(local_rank)
         torch.cuda.set_per_process_memory_fraction(args.gpu_memory_fraction)
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=False)
     fingerprint = tokenizer_fingerprint(tokenizer)
@@ -122,13 +127,20 @@ def main():
         trust_remote_code=False,
     )
     model.config.use_cache = False
-    model = get_peft_model(model, LoraConfig(
-        r=args.lora_r,
-        lora_alpha=2 * args.lora_r,
-        target_modules="all-linear",
-        task_type="CAUSAL_LM",
-    ))
-    model.enable_input_require_grads()
+    if args.full_finetune:
+        fsdp_layers = getattr(model, "_no_split_modules", None)
+        if not fsdp_layers:
+            raise ValueError("Model does not define transformer layers for FSDP auto-wrap")
+    else:
+        from peft import LoraConfig, get_peft_model
+
+        model = get_peft_model(model, LoraConfig(
+            r=args.lora_r,
+            lora_alpha=2 * args.lora_r,
+            target_modules="all-linear",
+            task_type="CAUSAL_LM",
+        ))
+        model.enable_input_require_grads()
 
     class YesNoTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -141,6 +153,15 @@ def main():
             loss = F.cross_entropy(candidate_logits.float(), targets)
             return (loss, outputs) if return_outputs else loss
 
+    training_args_kwargs = {}
+    if args.full_finetune:
+        training_args_kwargs.update(
+            fsdp="full_shard auto_wrap",
+            fsdp_config={
+                "transformer_layer_cls_to_wrap": fsdp_layers,
+                "use_orig_params": True,
+            },
+        )
     training_args = TrainingArguments(
         output_dir=str(output),
         num_train_epochs=args.epochs,
@@ -156,6 +177,7 @@ def main():
         seed=args.seed,
         dataloader_num_workers=0,
         remove_unused_columns=False,
+        **training_args_kwargs,
     )
     trainer = YesNoTrainer(
         model=model,
@@ -166,21 +188,22 @@ def main():
     )
     result = trainer.train()
     trainer.save_model(str(output))
-    tokenizer.save_pretrained(output)
-    metadata = {
-        "arguments": vars(args),
-        "input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
-        "tokenizer_fingerprint": fingerprint,
-        "examples": len(rows),
-        "label_counts": dict(label_counts),
-        "objective": "cross_entropy over the exact lowercase yes/no tokens scored at inference",
-        "train_metrics": result.metrics,
-        "status": "complete",
-    }
-    output.joinpath("experiment.json").write_text(
-        json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    print(json.dumps(metadata, ensure_ascii=False), flush=True)
+    if trainer.is_world_process_zero():
+        tokenizer.save_pretrained(output)
+        metadata = {
+            "arguments": vars(args),
+            "input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
+            "tokenizer_fingerprint": fingerprint,
+            "examples": len(rows),
+            "label_counts": dict(label_counts),
+            "objective": "cross_entropy over the exact lowercase yes/no tokens scored at inference",
+            "train_metrics": result.metrics,
+            "status": "complete",
+        }
+        output.joinpath("experiment.json").write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(json.dumps(metadata, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":
