@@ -13,7 +13,7 @@ from .core import (
     transition_sft_examples, regression_reconstruction_candidate, write_jsonl,
 )
 from .prompts import (
-    JUDGE_PROBE_SUFFIX, ORACLE_SOLVE, PRIVILEGED_SUFFIX_RECONSTRUCTION, QUESTION, REPAIR,
+    JUDGE_PROBE, JUDGE_PROBE_SUFFIX, ORACLE_SOLVE, PRIVILEGED_SUFFIX_RECONSTRUCTION, QUESTION, REPAIR,
 )
 
 
@@ -59,6 +59,13 @@ def context_limited_budget(backend, prompt, requested_tokens):
             f"under --max-model-len={model_limit}"
         )
     return min(requested_tokens, available)
+
+
+def judge_prompt(backend, question, solution, prefix):
+    content = JUDGE_PROBE.format(
+        question=question, gold_answer=reference_answer(solution), prefix=prefix,
+    )
+    return backend.chat(content, thinking=False)
 
 
 def prepare(args):
@@ -135,9 +142,15 @@ def collect(args, backend):
                 offsets = reasoning_boundaries(trajectory["token_ids"], tokenizer, args.boundary, args.interval)
                 for batch_start in range(0, len(offsets), args.probe_batch_size):
                     batch_offsets = offsets[batch_start:batch_start + args.probe_batch_size]
-                    active_suffix = judge_suffix if args.probe_mode == "judge" else suffix
-                    requests = [prompt + trajectory["token_ids"][:offset] + active_suffix
-                                for offset in batch_offsets]
+                    if args.probe_mode == "judge":
+                        requests = [judge_prompt(
+                            backend, source["question"], source["solution"],
+                            tokenizer.decode(trajectory["token_ids"][:offset],
+                                             skip_special_tokens=False),
+                        ) for offset in batch_offsets]
+                    else:
+                        requests = [prompt + trajectory["token_ids"][:offset] + suffix
+                                    for offset in batch_offsets]
                     probe_started = time.perf_counter()
                     if args.probe_mode == "judge":
                         results = [[sample] for sample in backend.score_yes_no(requests)]
@@ -187,7 +200,7 @@ def reprobe(args, backend):
 
     tokenizer = backend.tokenizer
     for row in tqdm(read_jsonl(args.input), desc="Re-probing", unit="problem"):
-        if row.get("probe_mode") != "judge" or row.get("judge_probe_suffix_ids") is None:
+        if row.get("probe_mode") != "judge":
             raise ValueError(f"Input row {row['id']} does not contain judge-probe metadata")
         if row["tokenizer_fingerprint"] != backend.fingerprint:
             raise ValueError(f"Tokenizer mismatch for {row['id']}")
@@ -198,8 +211,11 @@ def reprobe(args, backend):
         probe_input_tokens = 0
         for batch_start in range(0, len(offsets), args.probe_batch_size):
             batch_offsets = offsets[batch_start:batch_start + args.probe_batch_size]
-            requests = [row["prompt_ids"] + row["trajectory_ids"][:offset]
-                        + row["judge_probe_suffix_ids"] for offset in batch_offsets]
+            requests = [judge_prompt(
+                backend, row["question"], row["solution"],
+                tokenizer.decode(row["trajectory_ids"][:offset],
+                                 skip_special_tokens=False),
+            ) for offset in batch_offsets]
             results = backend.score_yes_no(requests)
             probe_input_tokens += sum(map(len, requests))
             probes.extend({"offset": offset, "samples": [sample]}

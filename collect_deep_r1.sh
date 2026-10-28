@@ -8,7 +8,7 @@ EVAL_SEED=${EVAL_SEED:-42}
 OUT=${OUT:-outputs/deepmath-103k-r1-1.5b-seed${SEED}}
 COUNT=${COUNT:-200}
 COLLECT_LIMIT=${COLLECT_LIMIT:-1000}
-CUDA_DEVICES=${CUDA_DEVICES:-0,1}
+CUDA_DEVICES=${CUDA_DEVICES:-2,3}
 NPROC_PER_NODE=${NPROC_PER_NODE:-2}
 TENSOR_PARALLEL_SIZE=${TENSOR_PARALLEL_SIZE:-2}
 
@@ -19,7 +19,7 @@ JUDGE_DATA="$OUT/sft-wrong-to-correct-judge05-${COUNT}.jsonl"
 STABLE_DATA="$OUT/sft-wrong-to-correct-stablewc-${COUNT}.jsonl"
 CORRECT_DATA="$OUT/sft-correct-trajectory-${COUNT}.jsonl"
 
-for input in "$TRAIN_INPUT" "$EVAL_INPUT"; do
+for input in "$TRAIN_INPUT" "$EVAL_INPUT" data/aime-2024/test.jsonl data/amc23/test.jsonl; do
   if [[ ! -s "$input" ]]; then
     echo "Missing or empty dataset: $input" >&2
     exit 1
@@ -47,21 +47,20 @@ export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 uv run python -m probe_int.pipeline collect \
   --model "$MODEL" --input "$TRAIN_INPUT" --limit "$COLLECT_LIMIT" \
   --output "$PROBES" --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
-  --trajectory-batch-size 1 --boundary step --temperature 1 \
-  --max-trajectory-tokens 16384 --probe-mode judge --probe-batch-size 16 \
+  --trajectory-batch-size 8 --boundary step --temperature 1 \
+  --max-trajectory-tokens 16384 --probe-mode judge --probe-batch-size 32 \
   --max-model-len 32768 --dtype bfloat16 --seed "$SEED"
 
 # Build up to COUNT examples for each method: judge-threshold W->C, stable
 # step-only W->C, and generated correct trajectories as the SFT control.
 uv run python -m probe_int.pipeline build-transition-sft \
   --input "$PROBES" --output "$JUDGE_DATA" --limit "$COUNT" \
-  --correct-threshold 0.5 --wrong-threshold 0.5
+  --correct-threshold 0.5 --wrong-threshold 0.5 --skip-uncertain-probes
 
 uv run python -m probe_int.pipeline build-transition-sft \
   --input "$PROBES" --output "$STABLE_DATA" --limit "$COUNT" \
   --correct-threshold 0.7 --wrong-threshold 0.3 --target step_only \
-  --skip-uncertain-probes --min-probe-gap 2 --min-target-tokens 64 \
-  --max-target-tokens 2048 --require-stable-correct --require-correct-final-grade
+  --skip-uncertain-probes --require-correct-final-grade
 
 uv run python -m probe_int.pipeline build-correct-trajectory-sft \
   --input "$PROBES" --output "$CORRECT_DATA" --model "$MODEL" --limit "$COUNT"
@@ -71,6 +70,22 @@ eval_model() {
   uv run python -m probe_int.evaluate \
     --model "$model_dir" --input "$EVAL_INPUT" \
     --output "$model_dir/deepmath-103k/eval-seed${EVAL_SEED}.jsonl" \
+    --max-model-len 32768 --max-tokens 16384 --temperature 1 \
+    --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+    --gpu-memory-utilization 0.8 --dtype bfloat16 --seed "$EVAL_SEED"
+
+  # AIME 2024
+  uv run python -m probe_int.evaluate \
+    --model "$model_dir" --input data/aime-2024/test.jsonl \
+    --output "$model_dir/AIME/eval-seed${EVAL_SEED}.jsonl" \
+    --max-model-len 32768 --max-tokens 16384 --temperature 1 \
+    --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+    --gpu-memory-utilization 0.8 --dtype bfloat16 --seed "$EVAL_SEED"
+
+  # AMC23
+  uv run python -m probe_int.evaluate \
+    --model "$model_dir" --input data/amc23/test.jsonl \
+    --output "$model_dir/amc23/eval-seed${EVAL_SEED}.jsonl" \
     --max-model-len 32768 --max-tokens 16384 --temperature 1 \
     --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
     --gpu-memory-utilization 0.8 --dtype bfloat16 --seed "$EVAL_SEED"

@@ -5,10 +5,25 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from probe_int.pipeline import collect
+from probe_int.pipeline import collect, judge_prompt
 
 
 class CollectBatchTests(unittest.TestCase):
+    def test_judge_prompt_uses_standalone_user_turn(self):
+        calls = []
+        backend = SimpleNamespace(
+            chat=lambda content, thinking: calls.append((content, thinking)) or [1, 2],
+        )
+        prompt = judge_prompt(backend, "What is 6 times 7?", "42", "6 * 7 = 42")
+
+        self.assertEqual(prompt, [1, 2])
+        self.assertFalse(calls[0][1])
+        self.assertIn("definite, unresolved mathematical or logical error", calls[0][0])
+        self.assertIn("Do not answer no merely because the reasoning is incomplete", calls[0][0])
+        self.assertIn("Problem:\nWhat is 6 times 7?", calls[0][0])
+        self.assertIn("Reference answer:\n42", calls[0][0])
+        self.assertIn("Reasoning so far:\n6 * 7 = 42", calls[0][0])
+
     def test_trajectory_batching_preserves_rows_and_splits_batches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.jsonl"

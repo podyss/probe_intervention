@@ -7,6 +7,23 @@ JUDGE_PROBE_SUFFIX = (
     'the correct answer "{gold_answer}"? Answer only yes or no:'
 )
 
+JUDGE_PROBE = """Judge the reasoning prefix, not whether the solver has finished.
+Answer yes only if the reasoning so far is free of any definite, unresolved mathematical or logical error.
+Answer no if a definite error has occurred and has not been explicitly corrected by the end of the prefix.
+Do not answer no merely because the reasoning is incomplete or uses a different valid method.
+If an earlier error is explicitly corrected in the prefix, do not count it as unresolved.
+Use the correct answer only as a consistency check; do not judge only by whether it has appeared yet.
+Answer only yes or no.
+
+Problem:
+{question}
+
+Reference answer:
+{gold_answer}
+
+Reasoning so far:
+{prefix}"""
+
 ORACLE_SOLVE = """You are an expert mathematician. Solve the problem step by step,
 guided by the high-level oracle solution. Show a coherent derivation, but do not
 copy the oracle solution verbatim.
