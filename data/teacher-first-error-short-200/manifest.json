@@ -1,0 +1,32 @@
+{
+  "dataset": "teacher-first-error-short-200",
+  "source": "outputs/teacher-first-error-short-200/dataset-yes-no.jsonl",
+  "annotation_source": "external_first_error_audit",
+  "source_trajectory_pool": "DeepMath-103K R1 1.5B generated trajectories",
+  "schema": {
+    "label": ["Yes", "No"],
+    "group_key": "source_id",
+    "text_field": "reasoning_prefix",
+    "label_case_normalized_by_scripts": true
+  },
+  "files": {
+    "all.jsonl": {"examples": 208, "label_counts": {"yes": 104, "no": 104}},
+    "train.jsonl": {"examples": 168, "label_counts": {"yes": 84, "no": 84}},
+    "test.jsonl": {"examples": 40, "label_counts": {"yes": 20, "no": 20}}
+  },
+  "split_manifest": "split-manifest.json",
+  "split_seed": 42,
+  "split_unit": "source_id pair",
+  "experiment": {
+    "base_model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "training_script": "probe_int/train_step_labels.py",
+    "evaluation_script": "probe_int/evaluate_step_labels.py",
+    "epochs": 3,
+    "learning_rate": 0.00002,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "max_length": 4096,
+    "lora_rank": 8,
+    "seed": 42
+  }
+}

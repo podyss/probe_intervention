@@ -12,16 +12,16 @@ def make_batch(examples, pad_token_id):
     import torch
 
     width = max(len(example["input_ids"]) for example in examples)
-    input_ids, labels, attention_masks = [], [], []
+    input_ids, attention_masks, targets = [], [], []
     for example in examples:
         padding = width - len(example["input_ids"])
         input_ids.append(example["input_ids"] + [pad_token_id] * padding)
-        labels.append(example["labels"] + [-100] * padding)
         attention_masks.append([1] * len(example["input_ids"]) + [0] * padding)
+        targets.append(example["target"])
     return {
         "input_ids": torch.tensor(input_ids),
-        "labels": torch.tensor(labels),
         "attention_mask": torch.tensor(attention_masks),
+        "target": torch.tensor(targets),
     }
 
 
@@ -70,6 +70,7 @@ def main():
         raise FileExistsError(f"Refusing nonempty training output: {output}")
 
     import torch
+    import torch.nn.functional as F
     from datasets import Dataset
     from functools import partial
     from peft import LoraConfig, get_peft_model
@@ -86,8 +87,8 @@ def main():
         torch.cuda.set_per_process_memory_fraction(args.gpu_memory_fraction)
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=False)
     fingerprint = tokenizer_fingerprint(tokenizer)
-    yes_ids = tokenizer.encode(" Yes", add_special_tokens=False)
-    no_ids = tokenizer.encode(" No", add_special_tokens=False)
+    yes_ids = tokenizer.encode(" yes", add_special_tokens=False)
+    no_ids = tokenizer.encode(" no", add_special_tokens=False)
     if len(yes_ids) != 1 or len(no_ids) != 1:
         raise ValueError("This probe requires Yes and No to each be a single token")
 
@@ -98,15 +99,13 @@ def main():
         if label not in {"yes", "no"}:
             raise ValueError(f"Invalid label in {row.get('id')}: {label!r}")
         prompt = probe_prompt(tokenizer, row)
-        target = yes_ids[0] if label == "yes" else no_ids[0]
-        input_ids = prompt + [target]
-        if len(input_ids) > args.max_length:
+        if len(prompt) > args.max_length:
             raise ValueError(
-                f"{row['id']} has {len(input_ids)} tokens, above --max-length={args.max_length}"
+                f"{row['id']} has {len(prompt)} tokens, above --max-length={args.max_length}"
             )
         rows.append({
-            "input_ids": input_ids,
-            "labels": [-100] * len(prompt) + [target],
+            "input_ids": prompt,
+            "target": 0 if label == "yes" else 1,
         })
         label_counts[label] += 1
     if not rows or label_counts["yes"] != label_counts["no"]:
@@ -130,6 +129,18 @@ def main():
         task_type="CAUSAL_LM",
     ))
     model.enable_input_require_grads()
+
+    class YesNoTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            targets = inputs.pop("target")
+            attention_mask = inputs["attention_mask"]
+            outputs = model(**inputs)
+            last_positions = attention_mask.sum(dim=1) - 1
+            rows_idx = torch.arange(len(last_positions), device=last_positions.device)
+            candidate_logits = outputs.logits[rows_idx, last_positions][:, [yes_ids[0], no_ids[0]]]
+            loss = F.cross_entropy(candidate_logits.float(), targets)
+            return (loss, outputs) if return_outputs else loss
+
     training_args = TrainingArguments(
         output_dir=str(output),
         num_train_epochs=args.epochs,
@@ -144,8 +155,9 @@ def main():
         report_to="none",
         seed=args.seed,
         dataloader_num_workers=0,
+        remove_unused_columns=False,
     )
-    trainer = Trainer(
+    trainer = YesNoTrainer(
         model=model,
         args=training_args,
         train_dataset=Dataset.from_list(rows),
@@ -161,6 +173,7 @@ def main():
         "tokenizer_fingerprint": fingerprint,
         "examples": len(rows),
         "label_counts": dict(label_counts),
+        "objective": "cross_entropy over the exact lowercase yes/no tokens scored at inference",
         "train_metrics": result.metrics,
         "status": "complete",
     }

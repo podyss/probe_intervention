@@ -71,6 +71,28 @@ probe-int prepare --input data/gsm8k-full/test.parquet --split test \
 
 Remove `--limit` to prepare the complete split.
 
+## Teacher First-Error Step Labels
+
+`teacher-first-error-short-200/` contains the short, externally audited
+first-error examples used for the R1 1.5B Yes/No LoRA experiment.
+
+- `all.jsonl`: all 208 labeled prefixes (104 Yes, 104 No).
+- `train.jsonl`: 168 examples (84 Yes, 84 No).
+- `test.jsonl`: 40 examples (20 Yes, 20 No), held out by source problem.
+- `split-manifest.json`: seed and source IDs assigned to each split.
+- `manifest.json`: provenance, schema, counts, and the matching experiment.
+
+Each row includes the source problem, reference solution, teacher's first-error
+location and rationale, the reasoning prefix, and a `label` of `Yes` or `No`.
+The training and evaluation scripts normalize label case. Yes/No examples for
+one source problem are kept in the same split to avoid pair leakage. The
+annotations came from the external first-error audit stored under
+`outputs/teacher-first-error-short-200/` in the working experiment; inspect
+those audit records before redistributing the annotations.
+
+The experiment trained on `train.jsonl` and evaluated on `test.jsonl` with
+`probe_int/train_step_labels.py` and `probe_int/evaluate_step_labels.py`.
+
 ## DeepMath-103K
 
 `deepmath-103k/` contains the complete DeepMath-103K dataset from
