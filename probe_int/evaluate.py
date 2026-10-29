@@ -4,7 +4,6 @@ import importlib.metadata
 import json
 import multiprocessing
 import os
-import socket
 from collections import Counter
 from pathlib import Path
 
@@ -33,32 +32,56 @@ def evaluate_rows(args, source):
     return results
 
 
-def evaluate_dp_rank(rank, dp_size, master_ip, master_port, args, source,
-                     shard_output):
-    os.environ.update({
-        "VLLM_DP_RANK": str(rank),
-        "VLLM_DP_RANK_LOCAL": str(rank),
-        "VLLM_DP_SIZE": str(dp_size),
-        "VLLM_DP_MASTER_IP": master_ip,
-        "VLLM_DP_MASTER_PORT": str(master_port),
-    })
-    start = rank * len(source) // dp_size
-    end = (rank + 1) * len(source) // dp_size
-    rows = source[start:end]
+def evaluate_dp_rank(rank, args, rows, shard_output, gpu_devices):
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_devices)
+    for name in ("VLLM_DP_RANK", "VLLM_DP_RANK_LOCAL", "VLLM_DP_SIZE",
+                 "VLLM_DP_MASTER_IP", "VLLM_DP_MASTER_PORT"):
+        os.environ.pop(name, None)
     print(f"DP rank {rank}: evaluating {len(rows)} rows", flush=True)
     results = evaluate_rows(args, rows)
     write_jsonl(shard_output, results)
     print(f"DP rank {rank}: completed {len(results)} rows", flush=True)
 
 
-def available_port():
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
+def visible_gpu_ids(required_count):
+    configured = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if configured is not None:
+        devices = [device.strip() for device in configured.split(",") if device.strip()]
+    else:
+        import torch
+
+        devices = [str(index) for index in range(torch.cuda.device_count())]
+    if len(devices) < required_count:
+        raise ValueError(
+            f"Need {required_count} visible GPUs for data-parallel-size * "
+            f"tensor-parallel-size, found {len(devices)}: {devices}"
+        )
+    return devices
+
+
+def merge_dp_shards(source, shard_outputs, dp_size):
+    expected_ids = [row["id"] for row in source]
+    expected_set = set(expected_ids)
+    by_id = {}
+    for rank, path in enumerate(shard_outputs):
+        start = rank * len(source) // dp_size
+        end = (rank + 1) * len(source) // dp_size
+        expected_rank_ids = {row["id"] for row in source[start:end]}
+        shard_rows = list(read_jsonl(path))
+        shard_ids = [row["id"] for row in shard_rows]
+        if len(shard_ids) != len(set(shard_ids)) or set(shard_ids) != expected_rank_ids:
+            raise RuntimeError(
+                f"DP shard {rank} is incomplete or contains unexpected rows: "
+                f"expected {len(expected_rank_ids)}, found {len(shard_ids)}"
+            )
+        by_id.update((row["id"], row) for row in shard_rows)
+    if set(by_id) != expected_set or len(by_id) != len(expected_ids):
+        raise RuntimeError("Data-parallel outputs do not match the selected input rows")
+    return [by_id[row_id] for row_id in expected_ids]
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Evaluate a model on prepared GSM8K JSONL using vLLM")
+    parser = argparse.ArgumentParser(description="Evaluate a model on prepared math JSONL using vLLM")
     parser.add_argument("--model", required=True)
     parser.add_argument("--input", required=True, help="Prepared JSONL; split must be validation or test")
     parser.add_argument("--output", required=True)
@@ -115,29 +138,43 @@ def main():
     if args.data_parallel_size == 1:
         results = evaluate_rows(args, source)
     else:
+        gpu_ids = visible_gpu_ids(args.data_parallel_size * args.tensor_parallel_size)
         shard_outputs = [output.with_name(f"{output.name}.dp{rank}")
                          for rank in range(args.data_parallel_size)]
         if any(path.exists() for path in shard_outputs):
             raise FileExistsError("Refusing to overwrite a DP shard output")
-        context = multiprocessing.get_context("fork")
-        # All DP ranks must use the same rendezvous port.
-        master_port = available_port()
+        context = multiprocessing.get_context("spawn")
+        rows_by_rank = [
+            source[rank * len(source) // args.data_parallel_size:
+                   (rank + 1) * len(source) // args.data_parallel_size]
+            for rank in range(args.data_parallel_size)
+        ]
         workers = [context.Process(
             target=evaluate_dp_rank,
-            args=(rank, args.data_parallel_size, "127.0.0.1", master_port,
-                  args, source, shard_outputs[rank]),
+            args=(rank, args, rows_by_rank[rank], shard_outputs[rank],
+                  gpu_ids[rank * args.tensor_parallel_size:
+                          (rank + 1) * args.tensor_parallel_size]),
         ) for rank in range(args.data_parallel_size)]
         for worker in workers:
             worker.start()
         for worker in workers:
             worker.join()
-        if any(worker.exitcode != 0 for worker in workers):
-            raise RuntimeError(f"vLLM data-parallel worker failed: {[w.exitcode for w in workers]}")
-        by_id = {row["id"]: row for path in shard_outputs for row in read_jsonl(path)}
-        if set(by_id) != {row["id"] for row in source}:
-            raise RuntimeError("Data-parallel outputs do not match the selected input rows")
-        results = [by_id[row["id"]] for row in source]
+        failed_workers = [rank for rank, worker in enumerate(workers)
+                          if worker.exitcode != 0]
+        if any(not path.exists() for path in shard_outputs):
+            raise RuntimeError(
+                "Data-parallel worker failed before writing all shards; "
+                f"worker exit codes: {[worker.exitcode for worker in workers]}"
+            )
+        results = merge_dp_shards(source, shard_outputs, args.data_parallel_size)
         metadata["dp_shards"] = [str(path) for path in shard_outputs]
+        metadata["worker_exit_codes"] = [worker.exitcode for worker in workers]
+        if failed_workers:
+            print(
+                "Warning: workers exited nonzero after writing complete validated "
+                f"shards: {failed_workers}; merging validated results.",
+                flush=True,
+            )
     count = write_jsonl(output, results)
     correct = sum(row["grade"]["correct"] is True for row in results)
     graded = sum(row["grade"]["correct"] is not None for row in results)

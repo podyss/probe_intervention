@@ -1,0 +1,22 @@
+{
+  "source": "data/teacher-first-error-short-200",
+  "task": "judge whether shown reasoning is correct; identify and explain the first error when incorrect",
+  "split_policy": "copied from source train/test; source-problem isolation is preserved",
+  "counts": {
+    "train": {
+      "examples": 168,
+      "incorrect": 84,
+      "correct": 84
+    },
+    "test": {
+      "examples": 40,
+      "incorrect": 20,
+      "correct": 20
+    }
+  },
+  "label_mapping": {
+    "source Yes": "Incorrect, with teacher_rationale",
+    "source No": "Correct so far; the reasoning may be incomplete"
+  },
+  "note": "teacher_error_quote is not included because its quoted text is absent from the labeled reasoning prefixes."
+}

@@ -90,6 +90,38 @@ annotations came from the external first-error audit stored under
 `outputs/teacher-first-error-short-200/` in the working experiment; inspect
 those audit records before redistributing the annotations.
 
+To train a generative detector that explains positive findings, derive
+instruction-response data from the same source split:
+
+```bash
+uv run python -m probe_int.prepare_error_explanations \
+  --input-dir data/teacher-first-error-short-200 \
+  --output-dir data/teacher-first-error-explanations-200
+```
+
+The generated `Yes` targets use the existing `teacher_rationale`; `No` targets
+are exactly `No.` and do not expose the annotated error. The prompt contains
+the problem and reasoning prefix, but not the reference answer or error quote.
+The source train/test split and source-problem isolation are preserved. This
+reformats existing audit annotations; it does not create additional independent
+annotations.
+
+Full-parameter SFT with FSDP over four GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 uv run torchrun --standalone --nproc_per_node=4 \
+  -m probe_int.train_error_explanations \
+  --model "$BASE_MODEL" \
+  --data data/teacher-first-error-explanations-200/train.jsonl \
+  --output outputs/teacher-first-error-explanations-200/r1-1.5b-full-finetune \
+  --epochs 3 --learning-rate 2e-5 --batch-size 1 \
+  --gradient-accumulation-steps 4 --max-length 4096 \
+  --gpu-memory-fraction 0.9 --seed 42
+```
+
+Only assistant response tokens contribute to the loss. The output directory
+must be empty. The 40-row test split is reserved for evaluation.
+
 The experiment trained on `train.jsonl` and evaluated on `test.jsonl` with
 `probe_int/train_step_labels.py` and `probe_int/evaluate_step_labels.py`.
 For multi-GPU LoRA training, launch one process per GPU with `torchrun`:
@@ -125,6 +157,41 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 uv run torchrun --standalone --nproc_per_node=4 \
 This saves a full model checkpoint rather than a LoRA adapter. Full fine-tuning
 has substantially higher memory use; if it runs out of memory, lower
 `--max-length` (provided every training example fits the reduced limit).
+
+## Correctness Judgment With Error Explanations
+
+`teacher-first-error-reasoning-200/` reformats the same examples as generative
+instruction-response data. The model must say whether the shown reasoning is
+correct so far; for incorrect reasoning it must explain the audited first
+error. Correct examples explicitly allow an incomplete solution. The existing
+source-problem split is preserved (168 train, 40 test; both splits are balanced).
+
+Regenerate the data with:
+
+```bash
+uv run python -m probe_int.prepare_correctness_explanations
+```
+
+Train with the existing full-parameter FSDP trainer:
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_OFFLINE=1
+export BASE_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 uv run torchrun --standalone --nproc_per_node=4 \
+  -m probe_int.train_error_explanations \
+  --model "$BASE_MODEL" \
+  --data data/teacher-first-error-reasoning-200/train.jsonl \
+  --output outputs/teacher-first-error-reasoning-200/r1-1.5b-full-finetune \
+  --epochs 3 --learning-rate 2e-5 --batch-size 1 \
+  --gradient-accumulation-steps 4 --max-length 4096 \
+  --gpu-memory-fraction 0.9 --seed 42
+```
+
+The training output directory must be empty. The held-out `test.jsonl` is not
+used for training. Its targets use the audited rationale; short teacher error
+quotes are omitted because they do not occur verbatim in the labeled prefixes.
 
 ## DeepMath-103K
 
