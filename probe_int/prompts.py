@@ -8,9 +8,9 @@ JUDGE_PROBE_SUFFIX = (
 )
 
 JUDGE_PROBE = """Judge the reasoning prefix, not whether the solver has finished.
-Answer yes only if the reasoning so far is free of any definite, unresolved mathematical or logical error.
-Answer no if a definite error has occurred and has not been explicitly corrected by the end of the prefix.
-Do not answer no merely because the reasoning is incomplete or uses a different valid method.
+Answer yes if a definite mathematical or logical error has occurred and has not been explicitly corrected by the end of the prefix.
+Answer no only if the reasoning so far is free of any definite, unresolved error.
+Do not answer yes merely because the reasoning is incomplete or uses a different valid method.
 If an earlier error is explicitly corrected in the prefix, do not count it as unresolved.
 Use the correct answer only as a consistency check; do not judge only by whether it has appeared yet.
 Answer only yes or no.

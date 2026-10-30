@@ -68,6 +68,32 @@ def judge_prompt(backend, question, solution, prefix):
     return backend.chat(content, thinking=False)
 
 
+def collection_sources(args, excluded_ids):
+    sources = [row for row in read_jsonl(args.input)
+               if row.get("source_id", row["id"]) not in excluded_ids
+               and row["id"] not in excluded_ids]
+    if args.limit is None:
+        return sources
+    if not getattr(args, "repeat_input", False):
+        return sources[:args.limit]
+    if not sources:
+        return []
+    selected = []
+    occurrences = Counter()
+    while len(selected) < args.limit:
+        for row in sources:
+            source_id = str(row.get("source_id", row["id"]))
+            occurrence = occurrences[source_id]
+            occurrences[source_id] += 1
+            sample = dict(row, source_id=source_id, rollout_index=occurrence)
+            if occurrence:
+                sample["id"] = f"{row['id']}:rollout:{occurrence}"
+            selected.append(sample)
+            if len(selected) == args.limit:
+                break
+    return selected
+
+
 def prepare(args):
     if Path(args.input).suffix == ".parquet":
         import pyarrow.parquet as parquet
@@ -106,25 +132,19 @@ def prepare(args):
 
 
 def collect(args, backend):
-    from tqdm import tqdm
-
     tokenizer = backend.tokenizer
     excluded_ids = set()
     for input_path in getattr(args, "exclude_input", []):
         excluded_ids.update(row.get("source_id", row["id"]) for row in read_jsonl(input_path))
-    total = 0
-    for index, source in enumerate(read_jsonl(args.input)):
-        if args.limit is not None and index >= args.limit:
-            break
-        total += source["id"] not in excluded_ids
+    sources = collection_sources(args, excluded_ids)
 
-    def process_batch(batch):
+    def process_requests(requests):
         trajectory_started = time.perf_counter()
         trajectories = backend.generate(
-            [item[1] for item in batch], args.max_trajectory_tokens, args.temperature,
+            [item[1] for item in requests], args.max_trajectory_tokens, args.temperature,
         )
-        trajectory_seconds_per_item = (time.perf_counter() - trajectory_started) / len(batch)
-        for (source, prompt, suffix, judge_suffix), trajectory_samples in zip(batch, trajectories):
+        trajectory_seconds_per_item = (time.perf_counter() - trajectory_started) / len(requests)
+        for (source, prompt, suffix, judge_suffix), trajectory_samples in zip(requests, trajectories):
             trajectory = trajectory_samples[0]
             row = dict(
                 source, schema_version=1, model=args.model, tokenizer_fingerprint=backend.fingerprint,
@@ -168,31 +188,22 @@ def collect(args, backend):
                         ])
                         row["probes"].append({"offset": offset, "samples": graded})
             yield row
-            progress.update(1)
 
-    with tqdm(total=total, desc="Collecting", unit="problem") as progress:
-        pending = []
-        for index, source in enumerate(read_jsonl(args.input)):
-            if args.limit is not None and index >= args.limit:
-                break
-            if source["id"] in excluded_ids:
-                continue
-            if source["split"] not in {"train", "validation", "test"}:
-                raise ValueError("Every input row must have an explicit valid split")
-            prompt = backend.chat(QUESTION.format(question=source["question"]), thinking=True)
-            suffix = tokenizer.encode(backend.probe_suffix, add_special_tokens=False)
-            judge_suffix = None
-            if args.probe_mode == "judge":
-                gold_answer = json.dumps(reference_answer(source["solution"]), ensure_ascii=False)
-                judge_suffix = tokenizer.encode(
-                    JUDGE_PROBE_SUFFIX.format(gold_answer=gold_answer), add_special_tokens=False,
-                )
-            pending.append((source, prompt, suffix, judge_suffix))
-            if len(pending) >= args.trajectory_batch_size:
-                yield from process_batch(pending)
-                pending = []
-        if pending:
-            yield from process_batch(pending)
+    requests = []
+    for source in sources:
+        if source["split"] not in {"train", "validation", "test"}:
+            raise ValueError("Every input row must have an explicit valid split")
+        prompt = backend.chat(QUESTION.format(question=source["question"]), thinking=True)
+        suffix = tokenizer.encode(backend.probe_suffix, add_special_tokens=False)
+        judge_suffix = None
+        if args.probe_mode == "judge":
+            gold_answer = json.dumps(reference_answer(source["solution"]), ensure_ascii=False)
+            judge_suffix = tokenizer.encode(
+                JUDGE_PROBE_SUFFIX.format(gold_answer=gold_answer), add_special_tokens=False,
+            )
+        requests.append((source, prompt, suffix, judge_suffix))
+    if requests:
+        yield from process_requests(requests)
 
 
 def reprobe(args, backend):
@@ -414,10 +425,12 @@ def add_backend_options(parser):
     parser.add_argument("--model", required=True)
     parser.add_argument("--max-model-len", type=int, default=16384)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--data-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable-prefix-caching", action="store_true")
+    parser.add_argument("--no-progress", action="store_true")
 
 
 def build_parser():
@@ -438,14 +451,15 @@ def build_parser():
     collect_parser = commands["collect"]
     add_backend_options(collect_parser)
     collect_parser.add_argument("--limit", type=int)
+    collect_parser.add_argument("--repeat-input", action="store_true",
+                                help="Cycle through input rows until --limit trajectories are sampled")
     collect_parser.add_argument("--exclude-input", nargs="+", default=[])
     collect_parser.add_argument("--skip-probes", action="store_true",
                                 help="Collect generated trajectories without answer probes")
     collect_parser.add_argument("--boundary", choices=["step", "token"], default="step")
     collect_parser.add_argument("--interval", type=int, default=256)
-    collect_parser.add_argument("--max-trajectory-tokens", type=int, default=8192)
-    collect_parser.add_argument("--trajectory-batch-size", type=int, default=1,
-                                help="Number of problems to generate trajectories for in one vLLM batch")
+    collect_parser.add_argument("--max-trajectory-tokens", "--max-tokens",
+                                dest="max_trajectory_tokens", type=int, default=8192)
     collect_parser.add_argument("--temperature", type=float, default=0.7)
     collect_parser.add_argument("--max-answer-tokens", type=int, default=128)
     collect_parser.add_argument("--probe-samples", type=int, default=1)

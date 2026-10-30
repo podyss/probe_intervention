@@ -1,0 +1,37 @@
+{
+  "sources": {
+    "judge_data": "data/teacher-first-error-reasoning-200/train.jsonl",
+    "generated_trajectories": "outputs/deepmath-103k-r1-1.5b-seed42/probes-1000-judge.jsonl",
+    "exclude_data": [
+      "data/teacher-first-error-short-200/train.jsonl",
+      "data/teacher-first-error-short-200/test.jsonl"
+    ]
+  },
+  "source_sha256": {
+    "data/teacher-first-error-reasoning-200/train.jsonl": "82778443ba0bd6527f4c3a6470b055ca2efab310b373a9d30674a3be770077bc",
+    "outputs/deepmath-103k-r1-1.5b-seed42/probes-1000-judge.jsonl": "d9ab588e96f96b8c7bf740d5ba3c6a3a086b642f3e57fde262edd494278ae942",
+    "data/teacher-first-error-short-200/train.jsonl": "6fd2142727081eb52b2652023eaf408c16aa49e9d4a1f0d4a2d70389c01c7952",
+    "data/teacher-first-error-short-200/test.jsonl": "77aa456fc43cae8bbed741ae5a5bca897856e0580cfa91b21d195566ad42a57e"
+  },
+  "tokenizer_fingerprint": "595d349ca18e3d6e45909fe7d31feb99f15014a9f2f41e3db9e1786065516080",
+  "max_length": 8192,
+  "seed": 42,
+  "candidate_counts": {
+    "rows": 1000,
+    "not_train": 0,
+    "not_verified_correct": 386,
+    "excluded_overlap": 74,
+    "over_max_length": 194,
+    "eligible": 346
+  },
+  "counts": {
+    "total": 328,
+    "reasoning_correctness_judgment": 168,
+    "verified_generated_math_solution": 160
+  },
+  "label_mapping": {
+    "source Yes": "Incorrect",
+    "source No": "Correct"
+  },
+  "status": "complete"
+}

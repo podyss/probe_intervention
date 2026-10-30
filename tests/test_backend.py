@@ -37,6 +37,14 @@ class BackendChatTests(unittest.TestCase):
         self.assertEqual(backend.chat("solve", thinking=True), [1])
         self.assertEqual(backend.probe_suffix, QWEN25_PROBE_SUFFIX)
 
+    def test_chat_template_batch_encoding_extracts_integer_input_ids(self):
+        backend = self.make_backend("")
+        backend.tokenizer.apply_chat_template = lambda *args, **kwargs: SimpleNamespace(
+            input_ids=[7, 8, 9],
+        )
+
+        self.assertEqual(backend.chat("solve", thinking=True), [7, 8, 9])
+
     def test_chat_template_with_open_think_uses_qwen3_probe_suffix(self):
         from probe_int.prompts import PROBE_SUFFIX
 

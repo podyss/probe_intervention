@@ -11,12 +11,12 @@ dependencies = [
     "accelerate==1.11.0",
     "datasets==3.6.0",
     "math-verify==0.8.0",
-    "peft==0.17.1",
+    "peft==0.18.1",
     "pyarrow>=15",
     "tqdm>=4.66",
-    "torch==2.8.0",
-    "transformers==4.57.1",
-    "vllm==0.11.0",
+    "torch==2.11.0",
+    "transformers==5.5.3",
+    "vllm==0.26.0",
 ]
 
 [project.scripts]

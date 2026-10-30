@@ -1,0 +1,10 @@
+{
+  "source": "data/teacher-first-error-reasoning-200-mixed-160/train.jsonl",
+  "source_sha256": "5b993704f03eeab5e09e547b9b431f66669a23ab6cb97a34b96ae6375719e1a3",
+  "counts": {
+    "total": 160,
+    "verified_generated_math_solution": 160
+  },
+  "objective": "causal language modeling on verified full math solutions only",
+  "status": "complete"
+}

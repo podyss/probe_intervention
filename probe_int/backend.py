@@ -1,5 +1,6 @@
 import math
 import os
+from numbers import Integral
 
 from .core import tokenizer_fingerprint
 from .prompts import PROBE_SUFFIX
@@ -8,41 +9,85 @@ from .prompts import PROBE_SUFFIX
 QWEN25_PROBE_SUFFIX = "\n\nGive only the final answer in \\boxed{}: "
 
 
+def token_ids(encoded):
+    if hasattr(encoded, "input_ids"):
+        encoded = encoded.input_ids
+    elif isinstance(encoded, dict) and "input_ids" in encoded:
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if encoded and isinstance(encoded[0], list):
+        if len(encoded) != 1:
+            raise ValueError("Expected one chat prompt, got a batched tokenization result")
+        encoded = encoded[0]
+    if any(not isinstance(token_id, Integral) or isinstance(token_id, bool)
+           for token_id in encoded):
+        raise TypeError("Chat template must return integer token IDs")
+    return [int(token_id) for token_id in encoded]
+
+
 class VLLMBackend:
     def __init__(self, args):
         if args.tensor_parallel_size > 1:
             # Avoid CUDA symmetric-memory rendezvous failures on some drivers.
             os.environ.setdefault("VLLM_ALLREDUCE_USE_SYMM_MEM", "0")
+        from .vllm_dp import configure_runtime
+
+        needs_triton_fallback = configure_runtime()
         from vllm import LLM, SamplingParams
 
         self.args = args
         self.sampling_params = SamplingParams
         self.max_model_len = args.max_model_len
-        self.llm = LLM(
+        self.data_parallel_size = getattr(args, "data_parallel_size", 1)
+        if self.data_parallel_size < 1:
+            raise ValueError("--data-parallel-size must be positive")
+        self.engine_options = dict(
             model=args.model, tensor_parallel_size=args.tensor_parallel_size,
             dtype=args.dtype, max_model_len=args.max_model_len,
             gpu_memory_utilization=args.gpu_memory_utilization,
             enable_prefix_caching=not getattr(args, "disable_prefix_caching", False),
             seed=args.seed, trust_remote_code=False, logprobs_mode="processed_logprobs",
         )
-        self.tokenizer = self.llm.get_tokenizer()
+        if needs_triton_fallback:
+            self.engine_options["gdn_prefill_backend"] = "triton"
+        if self.data_parallel_size > 1:
+            from transformers import AutoTokenizer
+
+            self.llm = None
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                args.model, trust_remote_code=False,
+            )
+        else:
+            self.llm = LLM(**self.engine_options)
+            self.tokenizer = self.llm.get_tokenizer()
         self.fingerprint = tokenizer_fingerprint(self.tokenizer)
         self.yes_token_ids = self.tokenizer.encode(" yes", add_special_tokens=False)
         self.no_token_ids = self.tokenizer.encode(" no", add_special_tokens=False)
-        template_probe = self.tokenizer.apply_chat_template(
+        template_probe = token_ids(self.tokenizer.apply_chat_template(
             [{"role": "user", "content": ""}], tokenize=True,
             add_generation_prompt=True, enable_thinking=False,
-        )
+        ))
         self.has_thinking_tokens = "<think>\n" in self.tokenizer.decode(
             template_probe, skip_special_tokens=False,
         )
         self.probe_suffix = QWEN25_PROBE_SUFFIX
 
+    def _generate_requests(self, prompts, params, params_kwargs, use_tqdm):
+        if getattr(self, "data_parallel_size", 1) > 1:
+            from .vllm_dp import generate_with_dp
+
+            return generate_with_dp(
+                prompts, params_kwargs, self.engine_options,
+                self.data_parallel_size, use_tqdm,
+            )
+        return self.llm.generate(prompts, params, use_tqdm=use_tqdm)
+
     def chat(self, content, thinking):
-        prompt = self.tokenizer.apply_chat_template(
+        prompt = token_ids(self.tokenizer.apply_chat_template(
             [{"role": "user", "content": content}], tokenize=True,
             add_generation_prompt=True, enable_thinking=thinking,
-        )
+        ))
         text = self.tokenizer.decode(prompt, skip_special_tokens=False)
         think_open = "<think>\n"
         if thinking:
@@ -70,13 +115,14 @@ class VLLMBackend:
                 f"Request exceeds --max-model-len={self.max_model_len}: "
                 f"prompt={prompt_tokens} tokens, requested_output={output_tokens} tokens"
             )
-        params = self.sampling_params(
+        params_kwargs = dict(
             n=samples, temperature=temperature, top_p=top_p,
             max_tokens=max_tokens, stop=stop,
         )
-        outputs = self.llm.generate(
+        params = self.sampling_params(**params_kwargs)
+        outputs = self._generate_requests(
             [{"prompt_token_ids": prompt} for prompt in prompts], params,
-            use_tqdm=not getattr(self.args, "no_progress", True),
+            params_kwargs, use_tqdm=not getattr(self.args, "no_progress", False),
         )
         think_prefix = self.tokenizer.encode("<think>\n", add_special_tokens=False)
         formatted = []
@@ -111,13 +157,14 @@ class VLLMBackend:
             )
         request_prompts = [{"prompt_token_ids": prompt} for prompt in prompts]
 
-        params = self.sampling_params(
+        params_kwargs = dict(
             temperature=1.0, max_tokens=1, logprobs=2,
             allowed_token_ids=[yes_id, no_id],
         )
-        outputs = self.llm.generate(
-            request_prompts, params,
-            use_tqdm=not getattr(self.args, "no_progress", True),
+        params = self.sampling_params(**params_kwargs)
+        outputs = self._generate_requests(
+            request_prompts, params, params_kwargs,
+            use_tqdm=not getattr(self.args, "no_progress", False),
         )
         def has_finite_logprob(score):
             return score is not None and math.isfinite(score.logprob)
@@ -147,13 +194,14 @@ class VLLMBackend:
                     "Judge-token logprobs were omitted and prompt-logprob fallback "
                     "would exceed --max-model-len"
                 )
-            fallback_params = self.sampling_params(
+            fallback_params_kwargs = dict(
                 temperature=0, max_tokens=1, prompt_logprobs=1,
             )
-            fallback_outputs = self.llm.generate(
+            fallback_params = self.sampling_params(**fallback_params_kwargs)
+            fallback_outputs = self._generate_requests(
                 [{"prompt_token_ids": prompt} for prompt in fallback_prompts],
-                fallback_params,
-                use_tqdm=not getattr(self.args, "no_progress", True),
+                fallback_params, fallback_params_kwargs,
+                use_tqdm=not getattr(self.args, "no_progress", False),
             )
             fallback_by_index = {index: {} for index in missing_indices}
             for (index, token_id), output in zip(fallback_owners, fallback_outputs):

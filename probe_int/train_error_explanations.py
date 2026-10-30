@@ -80,6 +80,7 @@ def main():
         prompt_ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": row["prompt"]}],
             tokenize=True,
+            return_dict=False,
             add_generation_prompt=True,
             enable_thinking=False,
         )

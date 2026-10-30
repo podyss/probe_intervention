@@ -35,6 +35,7 @@ def probe_prompt(tokenizer, row):
     prompt = tokenizer.apply_chat_template(
         [{"role": "user", "content": content}],
         tokenize=True,
+        return_dict=False,
         add_generation_prompt=True,
         enable_thinking=False,
     )
