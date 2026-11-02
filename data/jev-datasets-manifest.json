@@ -1,0 +1,40 @@
+{
+  "sources": {
+    "mathqa": "allenai/math_qa",
+    "compmath-mcq": "biancaraimondi/CompMath-MCQ"
+  },
+  "deduplication": "MathQA train exact normalized Problem text, first occurrence kept",
+  "dev_split": {
+    "method": "seeded whole-category split",
+    "group": "MathQA category",
+    "fraction": 0.1,
+    "seed": 42
+  },
+  "outputs": [
+    {
+      "path": "data/jev-mathqa/train.jsonl",
+      "rows": 22774,
+      "sha256": "7013ef9ab6ed53dfb7084100a6b90493bde4af2a51145dc2080da19e6b2de6a6"
+    },
+    {
+      "path": "data/jev-mathqa/dev.jsonl",
+      "rows": 7063,
+      "sha256": "c20d5e8c716bb93deb087ec3027b99b7d4e4022ce8089ad9df54c47e3530965f"
+    },
+    {
+      "path": "data/jev-mathqa/validation.jsonl",
+      "rows": 4475,
+      "sha256": "e809d5df53bb7260a36352ac3f2a6e4c5743676a296eec2ea93a2b6fda8ac1ee"
+    },
+    {
+      "path": "data/jev-mathqa/test.jsonl",
+      "rows": 2985,
+      "sha256": "2968b6fef50d1cc3aea41dac5e90544ff19be29554408797f223e67a8e2304c7"
+    },
+    {
+      "path": "data/compmath-mcq/test.jsonl",
+      "rows": 1527,
+      "sha256": "f483bcc5b711c02d8cfdb4b16ae126075136fc948cb05aeaf370c39ced2199d7"
+    }
+  ]
+}
