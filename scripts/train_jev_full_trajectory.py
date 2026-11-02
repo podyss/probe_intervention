@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--stop-after-epoch", type=int, default=0,
                         help="Stop and save after this epoch while keeping the full --epochs LR schedule")
     parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--lr-scheduler", choices=("linear", "constant"), default="linear",
+                        help="constant keeps the learning rate fixed, with no warmup")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=512)
@@ -186,7 +188,7 @@ def main():
     batches_per_rank = math.ceil(sampler_size / args.batch_size)
     steps_per_epoch = math.ceil(batches_per_rank / args.gradient_accumulation_steps)
     total_steps = steps_per_epoch * args.epochs
-    warmup_steps = max(1, round(total_steps * 0.03))
+    warmup_steps = 0 if args.lr_scheduler == "constant" else max(1, round(total_steps * 0.03))
     update_step = 0
     completed_epochs = 0
     optimizer.zero_grad(set_to_none=True)
@@ -244,6 +246,7 @@ def main():
                         f"samples={update_sample_ids}, first_bad_grad={bad_grad}"
                     )
                 lr_scale = (
+                    1.0 if args.lr_scheduler == "constant" else
                     update_step / warmup_steps if update_step <= warmup_steps
                     else max(0.0, (total_steps - update_step) / max(1, total_steps - warmup_steps))
                 )
@@ -288,6 +291,8 @@ def main():
             "warmup_steps": warmup_steps,
             "seed": args.seed,
             "learning_rate": args.learning_rate,
+            "lr_scheduler": args.lr_scheduler,
+            "final_learning_rate": optimizer.param_groups[0]["lr"],
             "world_size": world_size,
             "global_batch_size": world_size * args.batch_size * args.gradient_accumulation_steps,
             "batch_size_per_gpu": args.batch_size,

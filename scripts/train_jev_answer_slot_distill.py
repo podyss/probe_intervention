@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--stop-after-epoch", type=int, default=0,
                         help="Stop and save after this epoch while keeping the full --epochs LR schedule")
     parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--lr-scheduler", choices=("linear", "constant"), default="linear",
+                        help="constant keeps the learning rate fixed, with no warmup")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--max-length", type=int, default=512)
@@ -210,7 +212,7 @@ def main():
     batches_per_rank = math.ceil((sampler_size // world_size) / args.batch_size)
     steps_per_epoch = math.ceil(batches_per_rank / args.gradient_accumulation_steps)
     total_steps = steps_per_epoch * args.epochs
-    warmup_steps = max(1, round(total_steps * 0.03))
+    warmup_steps = 0 if args.lr_scheduler == "constant" else max(1, round(total_steps * 0.03))
     update_step = 0
     completed_epochs = 0
     optimizer.zero_grad(set_to_none=True)
@@ -320,6 +322,7 @@ def main():
                 if not torch.isfinite(grad_norm):
                     raise FloatingPointError(f"Non-finite gradient norm at update {update_step}")
                 lr_scale = (
+                    1.0 if args.lr_scheduler == "constant" else
                     update_step / warmup_steps if update_step <= warmup_steps
                     else max(0.0, (total_steps - update_step) / max(1, total_steps - warmup_steps))
                 )
@@ -331,7 +334,8 @@ def main():
                     print(
                         f"epoch={epoch + 1} step={update_step}/{total_steps} "
                         f"ce={answer_loss.item():.5f} kl={logit_loss.item():.5f} "
-                        f"hidden={hidden_loss.item():.5f} total={loss.item():.5f}",
+                        f"hidden={hidden_loss.item():.5f} total={loss.item():.5f} "
+                        f"lr={optimizer.param_groups[0]['lr']:.8g}",
                         flush=True,
                     )
 
@@ -367,6 +371,8 @@ def main():
             "warmup_steps": warmup_steps,
             "seed": args.seed,
             "learning_rate": args.learning_rate,
+            "lr_scheduler": args.lr_scheduler,
+            "final_learning_rate": optimizer.param_groups[0]["lr"],
             "world_size": world_size,
             "global_batch_size": world_size * args.batch_size * args.gradient_accumulation_steps,
             "batch_size_per_gpu": args.batch_size,
