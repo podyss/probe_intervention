@@ -24,6 +24,10 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, default=Path("outputs/jev-constant-lr-2e-5"))
     parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--hidden-loss-weight", type=float, default=0.0,
+                        help="Hidden cosine loss weight for CE + logits KL jobs")
+    parser.add_argument("--jobs", nargs="+", choices=("ce-only-epoch1", "full-sft-epoch1",
+                        "full-sft-epoch3", "ce-logits-epoch1", "ce-logits-epoch3"))
     parser.add_argument("--stop-on-collapse", action="store_true",
                         help="Stop the suite if at least 95%% of predictions select one option")
     args = parser.parse_args()
@@ -55,10 +59,17 @@ def main():
         ("ce-logits-epoch1", "Ours（CE＋logits KL）", 1, "train_jev_answer_slot_distill.py", 1.0),
         ("ce-logits-epoch3", "Ours（CE＋logits KL）", 3, "train_jev_answer_slot_distill.py", 1.0),
     ]
+    if args.jobs:
+        jobs = [job for job in jobs if job[0] in args.jobs]
+    if args.hidden_loss_weight:
+        jobs = [(name, method + "＋hidden 余弦对齐" if weight else method,
+                 epochs, script, weight) for name, method, epochs, script, weight in jobs]
     manifest_path = args.output / "results.json"
     manifest = {
         "status": "running", "model": args.model, "gpus": "2,3",
         "learning_rate": args.learning_rate, "lr_scheduler": "constant", "warmup_steps": 0,
+        "hidden_loss_weight_for_logits_jobs": args.hidden_loss_weight,
+        "selected_jobs": [job[0] for job in jobs],
         "stop_on_collapse": args.stop_on_collapse, "collapse_threshold": 0.95,
         "global_batch_size": 32, "batch_size_per_gpu": 4, "gradient_accumulation_steps": 4,
         "examples": 2048, "seed": 42, "max_length": 512,
@@ -113,8 +124,9 @@ def main():
                              "--nproc_per_node=2", str(source_dir / script), *common,
                              "--epochs", str(epochs), "--output", str(checkpoint)]
             if logit_weight is not None:
+                hidden_weight = args.hidden_loss_weight if logit_weight else 0.0
                 train_command += ["--temperature", "2.0", "--logit-loss-weight", str(logit_weight),
-                                  "--hidden-loss-weight", "0.0"]
+                                  "--hidden-loss-weight", str(hidden_weight)]
             metadata_path = checkpoint / "experiment.json"
             if not metadata_path.exists():
                 train_seconds = run(train_command, args.output / f"{name}-train.log")
@@ -129,7 +141,7 @@ def main():
                 "train_sha256": manifest["train_sha256"], "status": "complete",
             }
             if logit_weight is not None:
-                expected.update(logit_loss_weight=logit_weight, hidden_loss_weight=0.0,
+                expected.update(logit_loss_weight=logit_weight, hidden_loss_weight=hidden_weight,
                                 temperature=2.0)
             for key, value in expected.items():
                 if metadata.get(key) != value:
@@ -174,7 +186,7 @@ def main():
                 return
         manifest.update(status="complete", active_job=None)
         persist()
-        print("ALL FIVE CONSTANT-LR EXPERIMENTS COMPLETE", flush=True)
+        print("ALL SELECTED CONSTANT-LR EXPERIMENTS COMPLETE", flush=True)
     except BaseException as error:
         manifest.update(status="failed", error=repr(error))
         persist()
