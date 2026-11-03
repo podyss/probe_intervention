@@ -1,0 +1,44 @@
+{
+  "source": "https://huggingface.co/datasets/guipenedo/gsm8k-mc",
+  "source_revision": "fca1f0a07ad5b0c21fd67fcaec8532a37d9063e2",
+  "upstream_paper": "https://arxiv.org/abs/2405.11966",
+  "license": "No dataset card/license declared by the Hugging Face dataset; verify terms before redistribution.",
+  "rationale_source": "../gsm8k-full/{train,test}.parquet, matched by normalized exact question text",
+  "rationale_mapping": "extra_info.answer text before ####; final answer after #### is checked against the labeled option and omitted from rationale",
+  "schema": {
+    "Question": "question",
+    "A-D": "options, preserving source order",
+    "Answer": "gold_label and zero-based gold_index",
+    "rationale": "not provided by source; omitted"
+  },
+  "files": {
+    "source/train.jsonl": {
+      "sha256": "7cc145928ac8fda69cb5dbb05303757d973615342e3178c6317f945311e1644e"
+    },
+    "source/test.jsonl": {
+      "sha256": "1f647f28ca9a5eb9db5fa5e8ade4f360dc591440ac418d8906e34846042de418"
+    }
+  },
+  "rationale_files": {
+    "../gsm8k-full/train.parquet": {
+      "sha256": "8fb13a0cd8621e5fcacdee3ffe28b3a369975478ea7ab514781f3f190cba2488"
+    },
+    "../gsm8k-full/test.parquet": {
+      "sha256": "0dcd50ed32caa9d8f434d4e3ef8031bc3e49b0f823655a53be5c002e727f17dd"
+    }
+  },
+  "normalized": {
+    "train.jsonl": {
+      "rows": 7468,
+      "sha256": "ddf3b0848d4e2fcffdf1d8aa7c936bc5cf322bc9c8a4881e4bf83c8e9bf48f6f"
+    },
+    "test.jsonl": {
+      "rows": 1319,
+      "sha256": "726747103b5b3338dd03d8688969cfd492c04dac749ff57b945fb93dc8248d65"
+    }
+  },
+  "unmatched_gsm8k_rows": {
+    "train": 5,
+    "test": 0
+  }
+}

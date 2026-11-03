@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=2,3 \
   --output outputs/jev-ce-logits-kl-3epochs \
   --epochs 4 \
   --stop-after-epoch 1 \
-  --learning-rate 2e-5 \
+  --learning-rate 5e-6 \
   --batch-size 4 \
   --gradient-accumulation-steps 4 \
   --max-length 512 \

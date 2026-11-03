@@ -24,17 +24,30 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, default=Path("outputs/jev-constant-lr-2e-5"))
     parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--temperature", type=float, default=2.0)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--logit-loss-weight", type=float, default=1.0,
+                        help="KL loss weight for CE + logits KL jobs; CE weight stays 1")
     parser.add_argument("--hidden-loss-weight", type=float, default=0.0,
                         help="Hidden cosine loss weight for CE + logits KL jobs")
+    parser.add_argument("--hidden-layer-selection", choices=("quartiles", "eighths", "all", "last"), default="quartiles",
+                        help="Transformer layers to align with the hidden cosine loss")
+    parser.add_argument("--logit-distillation-mode", choices=("standard", "reasoning-gain"), default="standard")
+    parser.add_argument("--hidden-loss-type", choices=("cosine", "relational-kl", "answer-kl"), default="cosine")
+    parser.add_argument("--relation-temperature", type=float, default=0.1)
     parser.add_argument("--jobs", nargs="+", choices=("ce-only-epoch1", "full-sft-epoch1",
                         "full-sft-epoch3", "ce-logits-epoch1", "ce-logits-epoch3"))
     parser.add_argument("--stop-on-collapse", action="store_true",
                         help="Stop the suite if at least 95%% of predictions select one option")
     args = parser.parse_args()
+    if args.temperature <= 0:
+        parser.error("--temperature must be positive")
+    if not 0 <= args.logit_loss_weight < float("inf"):
+        parser.error("--logit-loss-weight must be finite and nonnegative")
     args.output.mkdir(parents=True, exist_ok=True)
     source_dir = args.output / "scripts"
     source_dir.mkdir(exist_ok=True)
-    names = ["train_jev_answer_slot_distill.py", "train_jev_full_trajectory.py",
+    names = ["train_jev_answer_slot_distill.py", "jev_distillation_losses.py", "train_jev_full_trajectory.py",
              "evaluate_jev_zero_shot.py", Path(__file__).name]
     for name in names:
         source = Path("scripts") / name
@@ -51,28 +64,39 @@ def main():
     common = ["--model", args.model, "--train", str(train_path),
               "--learning-rate", str(args.learning_rate), "--lr-scheduler", "constant",
               "--batch-size", "4", "--gradient-accumulation-steps", "4",
-              "--max-length", "512", "--max-train-examples", "2048", "--seed", "42"]
+              "--max-length", "512", "--max-train-examples", "2048", "--seed", str(args.seed)]
     jobs = [
         ("ce-only-epoch1", "直接监督答案 token", 1, "train_jev_answer_slot_distill.py", 0.0),
         ("full-sft-epoch1", "完整轨迹标准 SFT", 1, "train_jev_full_trajectory.py", None),
         ("full-sft-epoch3", "完整轨迹标准 SFT", 3, "train_jev_full_trajectory.py", None),
-        ("ce-logits-epoch1", "Ours（CE＋logits KL）", 1, "train_jev_answer_slot_distill.py", 1.0),
-        ("ce-logits-epoch3", "Ours（CE＋logits KL）", 3, "train_jev_answer_slot_distill.py", 1.0),
+        ("ce-logits-epoch1", "Ours（CE＋logits KL）", 1, "train_jev_answer_slot_distill.py", args.logit_loss_weight),
+        ("ce-logits-epoch3", "Ours（CE＋logits KL）", 3, "train_jev_answer_slot_distill.py", args.logit_loss_weight),
     ]
     if args.jobs:
         jobs = [job for job in jobs if job[0] in args.jobs]
     if args.hidden_loss_weight:
-        jobs = [(name, method + "＋hidden 余弦对齐" if weight else method,
+        hidden_description = {"cosine": "＋hidden 余弦对齐", "relational-kl": "＋hidden 关系 KL",
+                              "answer-kl": "＋hidden 答案投影 KL"}[args.hidden_loss_type]
+        jobs = [(name, method + hidden_description if weight else method,
                  epochs, script, weight) for name, method, epochs, script, weight in jobs]
+    if args.logit_distillation_mode == "reasoning-gain":
+        jobs = [(name, method + "（按推理增益筛选 KL）" if weight else method, epochs, script, weight)
+                for name, method, epochs, script, weight in jobs]
     manifest_path = args.output / "results.json"
     manifest = {
         "status": "running", "model": args.model, "gpus": "2,3",
         "learning_rate": args.learning_rate, "lr_scheduler": "constant", "warmup_steps": 0,
+        "temperature": args.temperature,
+        "logit_loss_weight_for_logits_jobs": args.logit_loss_weight,
         "hidden_loss_weight_for_logits_jobs": args.hidden_loss_weight,
+        "hidden_layer_selection": args.hidden_layer_selection,
+        "logit_distillation_mode": args.logit_distillation_mode,
+        "hidden_loss_type": args.hidden_loss_type,
+        "relation_temperature": args.relation_temperature,
         "selected_jobs": [job[0] for job in jobs],
         "stop_on_collapse": args.stop_on_collapse, "collapse_threshold": 0.95,
         "global_batch_size": 32, "batch_size_per_gpu": 4, "gradient_accumulation_steps": 4,
-        "examples": 2048, "seed": 42, "max_length": 512,
+        "examples": 2048, "seed": args.seed, "max_length": 512,
         "train_sha256": hashlib.sha256(train_path.read_bytes()).hexdigest(),
         "test_sha256": hashlib.sha256(test_path.read_bytes()).hexdigest(),
         "source_sha256": {name: hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
@@ -92,7 +116,10 @@ def main():
     def persist():
         manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         lines = [f"所有实验：固定学习率 {args.learning_rate:g}，无 warmup、无衰减；从原始 Qwen3-4B 初始化。",
-                 "2048 条训练样本，seed 42，max length 512，卡 2、3，全局 batch 32。",
+                 f"2048 条训练样本，seed {args.seed}（同时控制样本抽样与训练随机性），max length 512，卡 2、3，全局 batch 32。",
+                 f"CE only 的 KL/hidden 权重均为 0；KL 组温度 {args.temperature:g}、KL 权重 {args.logit_loss_weight:g}、hidden 权重 {args.hidden_loss_weight:g}。",
+                 f"中间层选择：{args.hidden_layer_selection}；hidden 损失类型 {args.hidden_loss_type}，在所选层间取平均，不含 embedding。",
+                 f"logits 蒸馏模式：{args.logit_distillation_mode}；关系 KL 温度 {args.relation_temperature:g}（与 logits KL 温度分开）。",
                  "MathQA test 直接读取答案选项概率，不生成推理链。", "",
                  "| 方法 | 实际训练 epoch | 正确数 | 准确率 |", "|---|---:|---:|---:|"]
         for row in manifest["results"]:
@@ -125,8 +152,12 @@ def main():
                              "--epochs", str(epochs), "--output", str(checkpoint)]
             if logit_weight is not None:
                 hidden_weight = args.hidden_loss_weight if logit_weight else 0.0
-                train_command += ["--temperature", "2.0", "--logit-loss-weight", str(logit_weight),
-                                  "--hidden-loss-weight", str(hidden_weight)]
+                train_command += ["--temperature", str(args.temperature), "--logit-loss-weight", str(logit_weight),
+                                  "--hidden-loss-weight", str(hidden_weight),
+                                  "--hidden-layer-selection", args.hidden_layer_selection,
+                                  "--logit-distillation-mode", args.logit_distillation_mode,
+                                  "--hidden-loss-type", args.hidden_loss_type,
+                                  "--relation-temperature", str(args.relation_temperature)]
             metadata_path = checkpoint / "experiment.json"
             if not metadata_path.exists():
                 train_seconds = run(train_command, args.output / f"{name}-train.log")
@@ -137,12 +168,21 @@ def main():
                 "learning_rate": args.learning_rate, "lr_scheduler": "constant", "warmup_steps": 0,
                 "final_learning_rate": args.learning_rate, "global_batch_size": 32,
                 "batch_size_per_gpu": 4, "gradient_accumulation_steps": 4,
-                "examples": 2048, "max_length": 512, "seed": 42,
+                "examples": 2048, "max_length": 512, "seed": args.seed,
                 "train_sha256": manifest["train_sha256"], "status": "complete",
             }
             if logit_weight is not None:
                 expected.update(logit_loss_weight=logit_weight, hidden_loss_weight=hidden_weight,
-                                temperature=2.0)
+                                temperature=args.temperature, hidden_layer_selection=args.hidden_layer_selection,
+                                logit_distillation_mode=args.logit_distillation_mode, hidden_loss_type=args.hidden_loss_type,
+                                relation_temperature=args.relation_temperature)
+                layer_count = json.loads((checkpoint / "config.json").read_text())["num_hidden_layers"]
+                selected_layer_count = {"eighths": 8, "last": 1}.get(args.hidden_layer_selection, 4)
+                expected["hidden_layers_1_indexed"] = (
+                    list(range(1, layer_count + 1)) if args.hidden_layer_selection == "all"
+                    else sorted({max(1, round(layer_count * index / selected_layer_count))
+                                 for index in range(1, selected_layer_count + 1)})
+                )
             for key, value in expected.items():
                 if metadata.get(key) != value:
                     raise ValueError(f"{name}: {key}: {metadata.get(key)!r} != {value!r}")

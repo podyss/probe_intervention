@@ -46,6 +46,12 @@ def main():
     parser.add_argument("--temperature", type=float, default=2.0)
     parser.add_argument("--logit-loss-weight", type=float, default=1.0)
     parser.add_argument("--hidden-loss-weight", type=float, default=0.1)
+    parser.add_argument("--hidden-layer-selection", choices=("quartiles", "eighths", "all", "last"), default="quartiles",
+                        help="Align four or eight evenly spaced transformer layers, every layer, or only the last layer; exclude embeddings")
+    parser.add_argument("--logit-distillation-mode", choices=("standard", "reasoning-gain", "reasoning-gain-weighted"), default="standard",
+                        help="reasoning-gain gates KL on positive gold-option gain; weighted mode also scales each example by its gain")
+    parser.add_argument("--hidden-loss-type", choices=("cosine", "relational-kl", "answer-kl"), default="cosine")
+    parser.add_argument("--relation-temperature", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     if args.epochs < 1:
@@ -56,6 +62,8 @@ def main():
         parser.error("Distillation weights must be nonnegative")
     if args.temperature <= 0:
         parser.error("--temperature must be positive")
+    if not math.isfinite(args.relation_temperature) or args.relation_temperature <= 0:
+        parser.error("--relation-temperature must be finite and positive")
     if int(os.environ.get("WORLD_SIZE", "1")) < 2:
         parser.error("Full-parameter training requires torchrun with multiple GPUs")
     if args.output.exists() and any(args.output.iterdir()):
@@ -66,6 +74,10 @@ def main():
     import torch
     import torch.distributed as dist
     import torch.nn.functional as F
+    from jev_distillation_losses import (
+        answer_projected_hidden_kl, gain_weighted_logit_kl, gated_logit_kl,
+        reasoning_gain_mask, relational_hidden_kl,
+    )
     from torch.distributed.fsdp import (
         FullyShardedDataParallel as FSDP,
         FullStateDictConfig,
@@ -192,6 +204,11 @@ def main():
         )
         teacher_base.config.use_cache = False
         teacher_base.eval()
+        if use_hidden and args.hidden_loss_type == "answer-kl":
+            # Copy the small readout before FSDP shards its source parameters.
+            answer_projection = teacher_base.get_output_embeddings().weight[candidate_ids].detach().float().to(local_rank).clone()
+            answer_norm_weight = teacher_base.model.norm.weight.detach().float().to(local_rank).clone()
+            answer_norm_epsilon = teacher_base.config.rms_norm_eps
         teacher = wrap_model(teacher_base)
         for parameter in teacher.parameters():
             parameter.requires_grad_(False)
@@ -202,9 +219,14 @@ def main():
     student_base.config.use_cache = False
     student_base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     hidden_layer_count = student_base.config.num_hidden_layers
-    hidden_layers = sorted({
-        max(1, round(hidden_layer_count * fraction)) for fraction in (0.25, 0.5, 0.75, 1.0)
-    })
+    selected_layer_count = {"eighths": 8, "last": 1}.get(args.hidden_layer_selection, 4)
+    hidden_layers = (
+        list(range(1, hidden_layer_count + 1)) if args.hidden_layer_selection == "all"
+        else sorted({
+            max(1, round(hidden_layer_count * index / selected_layer_count))
+            for index in range(1, selected_layer_count + 1)
+        })
+    )
     student = wrap_model(student_base)
 
     optimizer = torch.optim.AdamW(student.parameters(), lr=args.learning_rate, weight_decay=0.01)
@@ -217,6 +239,7 @@ def main():
     completed_epochs = 0
     optimizer.zero_grad(set_to_none=True)
     temperature = args.temperature
+    gain_statistics = torch.zeros(3, device=local_rank, dtype=torch.float64)
 
     class EncodedDataset(Dataset):
         def __len__(self):
@@ -259,6 +282,7 @@ def main():
             )
             teacher_logits = None
             teacher_hidden = []
+            gain_mask = None
             if use_teacher:
                 with torch.no_grad():
                     teacher_outputs = teacher(
@@ -272,6 +296,25 @@ def main():
                             for layer in hidden_layers
                         ]
                     del teacher_outputs
+                    if args.logit_loss_weight > 0 and args.logit_distillation_mode in (
+                        "reasoning-gain", "reasoning-gain-weighted",
+                    ):
+                        baseline_outputs = teacher(**student_batch, logits_to_keep=1)
+                        baseline_logits = baseline_outputs.logits[:, -1, :].float()
+                        valid_teacher_options = (
+                            torch.arange(len(label_chars), device=local_rank)[None, :]
+                            < option_counts[:, None]
+                        )
+                        gain_mask, reasoning_gain = reasoning_gain_mask(
+                            teacher_logits[:, candidate_ids].masked_fill(~valid_teacher_options, -1e9),
+                            baseline_logits[:, candidate_ids].masked_fill(~valid_teacher_options, -1e9),
+                            targets,
+                        )
+                        gain_statistics += torch.stack([
+                            gain_mask.sum().double(), reasoning_gain.sum().double(),
+                            reasoning_gain.new_tensor(reasoning_gain.numel()).double(),
+                        ])
+                        del baseline_outputs, baseline_logits
 
             with student.no_sync() if not sync_now else torch.enable_grad():
                 student_outputs = student(
@@ -289,17 +332,35 @@ def main():
                 answer_loss = F.cross_entropy(option_logits, targets)
                 logit_loss = answer_loss.new_zeros(())
                 if args.logit_loss_weight > 0:
-                    logit_loss = F.kl_div(
-                        F.log_softmax(student_logits / temperature, dim=-1),
-                        F.softmax(teacher_logits / temperature, dim=-1),
-                        reduction="batchmean",
-                    ) * (temperature ** 2)
+                    if args.logit_distillation_mode == "reasoning-gain-weighted":
+                        logit_loss = gain_weighted_logit_kl(
+                            student_logits, teacher_logits, temperature, reasoning_gain,
+                        )
+                    elif gain_mask is not None:
+                        logit_loss = gated_logit_kl(student_logits, teacher_logits, temperature, gain_mask)
+                    else:
+                        logit_loss = F.kl_div(
+                            F.log_softmax(student_logits / temperature, dim=-1),
+                            F.softmax(teacher_logits / temperature, dim=-1),
+                            reduction="batchmean",
+                        ) * (temperature ** 2)
                 hidden_losses = []
                 for layer, target_hidden in zip(hidden_layers, teacher_hidden):
                     student_hidden = student_outputs.hidden_states[layer][:, -1, :].float()
-                    hidden_losses.append(
-                        1.0 - F.cosine_similarity(student_hidden, target_hidden, dim=-1).mean()
-                    )
+                    if args.hidden_loss_type == "relational-kl":
+                        hidden_losses.append(relational_hidden_kl(
+                            student_hidden, target_hidden, args.relation_temperature,
+                        ))
+                    elif args.hidden_loss_type == "answer-kl":
+                        hidden_losses.append(answer_projected_hidden_kl(
+                            student_hidden, target_hidden, answer_projection,
+                            answer_norm_weight, answer_norm_epsilon, valid_options,
+                            temperature=temperature, already_normalized=layer == hidden_layer_count,
+                        ))
+                    else:
+                        hidden_losses.append(
+                            1.0 - F.cosine_similarity(student_hidden, target_hidden, dim=-1).mean()
+                        )
                 hidden_loss = (
                     torch.stack(hidden_losses).mean() if hidden_losses else answer_loss.new_zeros(())
                 )
@@ -351,6 +412,7 @@ def main():
         if args.stop_after_epoch and completed_epochs >= args.stop_after_epoch:
             break
 
+    dist.all_reduce(gain_statistics)
     args.output.mkdir(parents=True, exist_ok=True)
     state_config = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
     with FSDP.state_dict_type(student, StateDictType.FULL_STATE_DICT, state_config):
@@ -386,10 +448,26 @@ def main():
             "logit_distillation": "temperature-scaled KL over the full vocabulary at the next-answer-token position",
             "temperature": temperature,
             "logit_loss_weight": args.logit_loss_weight,
+            "logit_distillation_mode": args.logit_distillation_mode,
+            "reasoning_gain_statistics": {
+                "selected_examples": int(gain_statistics[0].item()),
+                "observed_examples": int(gain_statistics[2].item()),
+                "mean_gold_probability_gain": (gain_statistics[1] / gain_statistics[2].clamp_min(1)).item(),
+            } if args.logit_distillation_mode in ("reasoning-gain", "reasoning-gain-weighted") else None,
             "answer_loss": "cross-entropy over valid answer-letter logits",
             "student_input": "question and options only, followed by Answer: (",
             "teacher_input": "question, options, and full training rationale, followed by Answer: (",
-            "hidden_distillation": "cross-context cosine alignment at the next-answer-token position for evenly spaced transformer layers",
+            "hidden_distillation": (
+                "KL between centered cross-GPU pairwise cosine distributions, excluding self; averaged across selected layers"
+                if args.hidden_loss_type == "relational-kl" else
+                "KL between valid-option distributions projected from selected hidden layers through the frozen original teacher RMSNorm and answer readout; final hidden state is already normalized"
+                if args.hidden_loss_type == "answer-kl" else
+                "cross-context cosine alignment at the next-answer-token position, averaged across selected transformer layers"
+            ),
+            "hidden_loss_type": args.hidden_loss_type,
+            "relation_temperature": args.relation_temperature,
+            "relation_batch_size": world_size * args.batch_size if args.hidden_loss_type == "relational-kl" else None,
+            "hidden_layer_selection": args.hidden_layer_selection,
             "hidden_layers_1_indexed": hidden_layers,
             "hidden_loss_weight": args.hidden_loss_weight,
             "truncated_examples": truncated_examples,

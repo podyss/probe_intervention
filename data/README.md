@@ -1,5 +1,43 @@
 # Bundled datasets
 
+## GSM-MC
+
+`gsm-mc/` contains the GSM-MC multiple-choice adaptation of GSM8K from
+[`guipenedo/gsm8k-mc`](https://huggingface.co/datasets/guipenedo/gsm8k-mc),
+which republishes the dataset introduced in [Multiple-Choice Questions are
+Efficient and Robust LLM Evaluators](https://arxiv.org/abs/2405.11966).
+
+- `source/{train,test}.jsonl`: downloaded upstream files, pinned to dataset
+  revision `fca1f0a07ad5b0c21fd67fcaec8532a37d9063e2`.
+- `{train,test}.jsonl`: normalized Jev rows, with `question`, four ordered
+  `options`, `gold_index`, `gold_label`, and `rationale`.
+- `prepare.py` and `manifest.json`: reproducible conversion, source checksums,
+  and row counts.
+- The source contains 7,468 training and 1,319 test examples. Rationales are
+  joined by exact normalized question text from `../gsm8k-full/{train,test}.parquet`;
+  the final answer is checked against the labeled option and excluded from the
+  `rationale` field. The resulting files support answer-token and
+  full-trajectory SFT training, as well as `evaluate_jev_zero_shot.py`.
+
+The Hugging Face dataset has no dataset card or declared data license. The
+upstream code repository is MIT-licensed, but that alone does not establish the
+license for the dataset contents. Check the source terms before redistribution.
+
+Evaluate the held-out split with:
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com \
+  .venv/bin/python scripts/evaluate_jev_zero_shot.py \
+  --model "$MODEL" --input data/gsm-mc/test.jsonl \
+  --output outputs/gsm-mc/eval.jsonl
+```
+
+Rebuild normalized files from the bundled originals and GSM8K rationales with:
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com .venv/bin/python data/gsm-mc/prepare.py
+```
+
 ## AMC 2023
 
 `amc23/` contains the 40-question test split from
