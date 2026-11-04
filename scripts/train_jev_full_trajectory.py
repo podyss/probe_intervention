@@ -43,6 +43,8 @@ def main():
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--max-train-examples", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--answer-first-rationale", action="store_true",
+                        help="Train the answer before the rationale, matching answer-only inference context")
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be positive")
@@ -113,7 +115,10 @@ def main():
 
             def make_full(reason_ids):
                 reason = tokenizer.decode(reason_ids, skip_special_tokens=True).strip()
-                response = f"Reasoning: {reason}{answer}" if reason else answer.lstrip()
+                if args.answer_first_rationale:
+                    response = f"Answer: ({row['gold_label']})\nReasoning: {reason}" if reason else f"Answer: ({row['gold_label']})"
+                else:
+                    response = f"Reasoning: {reason}{answer}" if reason else answer.lstrip()
                 return tokenizer.apply_chat_template(
                     [
                         {"role": "user", "content": user_content},
@@ -305,7 +310,12 @@ def main():
             "compute_dtype": "float32",
             "truncated_rationales": truncated_count,
             "max_grad_norm": 1.0,
-            "objective": "causal language modeling over the complete assistant rationale and answer; user prompt masked",
+            "objective": (
+                "causal language modeling over answer followed by rationale; user prompt masked"
+                if args.answer_first_rationale else
+                "causal language modeling over the complete assistant rationale and answer; user prompt masked"
+            ),
+            "answer_first_rationale": args.answer_first_rationale,
             "status": "complete" if completed_epochs == args.epochs else "stopped_after_requested_epoch",
         }
         (args.output / "experiment.json").write_text(

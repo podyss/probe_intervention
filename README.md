@@ -10,9 +10,10 @@ CUDA_VISIBLE_DEVICES=2,3 \
   --epochs 4 \
   --stop-after-epoch 1 \
   --learning-rate 5e-6 \
+  --lr-scheduler constant \
   --batch-size 4 \
   --gradient-accumulation-steps 4 \
-  --max-length 512 \
+  --max-length 1024 \
   --max-train-examples 2048 \
   --temperature 2.0 \
   --logit-loss-weight 1.0 \
@@ -28,6 +29,5 @@ CUDA_VISIBLE_DEVICES=2,3 \
   --input data/jev-mathqa/test.jsonl \
   --output outputs/jev-ce-logits-kl-3epochs-mathqa-test.jsonl \
   --batch-size 8 \
-  --data-parallel-size 2 \
-  --dtype bfloat16
+  --data-parallel-size 2
 ```
